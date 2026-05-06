@@ -63,8 +63,5 @@ int main(int argc, char* argv[]) {
     char *catalog_file = argv[3];
     int lines = count_lines(catalog_file);
     Book * catalog = read_catalog(catalog_file,lines);
-    for (int i=0;i<lines;i++){
-        printf("Book %d: Name: %s, Author %s, Year %d\n",i+1,catalog[i].name,catalog[i].author,catalog[i].year);
-    }
 }
 
