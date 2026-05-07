@@ -2,11 +2,13 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <string.h>
+Library lib;
 
 typedef struct {
     char username[100];
     char borrowed[100];
 } User;
+
 typedef struct {
     char name[100];
     char author[100];
@@ -22,9 +24,9 @@ typedef struct {
     int num_books;
     User *users;
     int num_users;
+    int capacity;
     pthread_mutex_t users_lock; //to ensure no two users are concurrently registering with the same name
 } Library;
-
 
 int count_lines(char file_name[]){
     char c;
@@ -38,7 +40,6 @@ int count_lines(char file_name[]){
     fclose(fp);
     return count;
 }
-
 
 Book* read_catalog(char *catalog_file,int lines){
     int MAX_FIELD_LENGTH=1024;
@@ -76,6 +77,41 @@ Book* read_catalog(char *catalog_file,int lines){
     return catalog;
 }
 
+void register_user(char * username){
+    pthread_mutex_lock(lib.users_lock);
+
+
+    //Is there another user with the same name?
+    for (int i = 0; i<lib.capacity;i++){
+        if(lib.users[i].username==username){
+            perror("Username already taken");
+            // TODO: should send something to user.sh
+            return;
+        }
+    }
+
+
+    // Is the list full?
+    if(lib.num_users==lib.capacity){
+        lib.capacity *= 2;
+        User *temp = realloc(lib.users, lib.capacity * sizeof(User));
+        if (temp == NULL){
+            perror("Failed to reallocate");
+            pthread_mutex_unlock(lib.users_lock);
+            // TODO: Should put something to send to user.sh
+            return;
+        }
+        lib.users = temp;
+    }
+
+    strncpy(lib.users[lib.num_users].username, username, 99);
+    lib->users[lib->num_users].username[99] = '\0'; // Ensure null-termination
+    lib->users[lib->num_users].borrowed[0] = '\0';  // They haven't borrowed anything yet
+    lib.num_users++;
+    pthread_mutex_unlock(lib.users_lock);
+    // TODO: send success to user.sh
+}
+
 int main(int argc, char* argv[]) {
     if (argc != 4) {
         fprintf(stderr, "Usage: %s <library_id> <num_libraries> <catalog_file>\n", argv[0]);
@@ -83,7 +119,6 @@ int main(int argc, char* argv[]) {
     }
 
     //initializing library
-    Library lib;
     lib.id = atoi(argv[1]);
     char *catalog_file = argv[3];
     lib.num_books = count_lines(catalog_file);
@@ -94,9 +129,11 @@ int main(int argc, char* argv[]) {
     }
 
     //Initializing user list
-    lib.users = NULL;
+    lib.capacity = 50;
+    lib.users = malloc(lib.capacity * sizeof(User));
     lib.num_users = 0;
     pthread_mutex_init(&lib.users_lock, NULL);
+ 
 
 
 }
