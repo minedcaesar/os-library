@@ -15,17 +15,6 @@ typedef struct {
     User *lent_to;
     pthread_mutex_t lock; // per-book lock
 } Book;
-int count_lines(char file_name[]){
-    char c;
-    FILE *fp = fopen(file_name,"r");
-    int count =0;
-    for (c = getc(fp); c != EOF; c = getc(fp)) {
-        if (c == '\n') {
-            count++;
-        }
-    }
-    return count;
-}
 
 typedef struct {
     int id;
@@ -35,6 +24,21 @@ typedef struct {
     int num_users;
     pthread_mutex_t users_lock; //to ensure no two users are concurrently registering with the same name
 } Library;
+
+
+int count_lines(char file_name[]){
+    char c;
+    FILE *fp = fopen(file_name,"r");
+    int count =0;
+    for (c = getc(fp); c != EOF; c = getc(fp)) {
+        if (c == '\n') {
+            count++;
+        }
+    }
+    fclose(fp);
+    return count;
+}
+
 
 Book* read_catalog(char *catalog_file,int lines){
     int MAX_FIELD_LENGTH=1024;
@@ -57,7 +61,7 @@ Book* read_catalog(char *catalog_file,int lines){
         token = strtok(NULL, ",");
         if (token != NULL) {
             strncpy(catalog[current_book].author, token, sizeof(catalog[current_book].name) - 1);
-            catalog[current_book].author[sizeof(catalog[current_book].name) - 1] = '\0';
+            catalog[current_book].author[sizeof(catalog[current_book].author) - 1] = '\0';
         }
         token = strtok(NULL, ",");
         if (token != NULL) {
@@ -65,6 +69,7 @@ Book* read_catalog(char *catalog_file,int lines){
         catalog[current_book].available=1;
         catalog[current_book].lent_to=NULL;
         }
+        pthread_mutex_init(&catalog[current_book].lock, NULL); //initializing per book mutex
         current_book++;
     }
     fclose(fp);
@@ -76,9 +81,23 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Usage: %s <library_id> <num_libraries> <catalog_file>\n", argv[0]);
         return 1;
     }
-    int id = atoi(argv[1]);
+
+    //initializing library
+    Library lib;
+    lib.id = atoi(argv[1]);
     char *catalog_file = argv[3];
-    int lines = count_lines(catalog_file);
-    Book * catalog = read_catalog(catalog_file,lines);
+    lib.num_books = count_lines(catalog_file);
+    lib.catalog = read_catalog(catalog_file,lib.num_books);
+    if (!lib.catalog) {
+        fprintf(stderr, "Failed to load catalog\n");
+        return 1;
+    }
+
+    //Initializing user list
+    lib.users = NULL;
+    lib.num_users = 0;
+    pthread_mutex_init(&lib.users_lock, NULL);
+
+
 }
 
