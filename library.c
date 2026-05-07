@@ -4,9 +4,15 @@
 #include <string.h>
 
 typedef struct {
+    char username[100];
+    char borrowed[100];
+} User;
+typedef struct {
     char name[100];
     char author[100];
     int year;
+    int available;
+    User *lent_to;
 } Book;
 int count_lines(char file_name[]){
     char c;
@@ -47,6 +53,8 @@ Book* read_catalog(char *catalog_file,int lines){
         token = strtok(NULL, ",");
         if (token != NULL) {
             catalog[current_book].year=atoi(token);
+catalog[current_book].available=1;
+catalog[current_book].lent_to=NULL;
         }
         current_book++;
     }
