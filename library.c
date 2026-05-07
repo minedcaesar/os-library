@@ -13,6 +13,7 @@ typedef struct {
     int year;
     int available;
     User *lent_to;
+    pthread_mutex_t lock; // per-book lock
 } Book;
 int count_lines(char file_name[]){
     char c;
@@ -26,6 +27,14 @@ int count_lines(char file_name[]){
     return count;
 }
 
+typedef struct {
+    int id;
+    Book *catalog;
+    int num_books;
+    User *users;
+    int num_users;
+    pthread_mutex_t users_lock; //to ensure no two users are concurrently registering with the same name
+} Library;
 
 Book* read_catalog(char *catalog_file,int lines){
     int MAX_FIELD_LENGTH=1024;
@@ -53,8 +62,8 @@ Book* read_catalog(char *catalog_file,int lines){
         token = strtok(NULL, ",");
         if (token != NULL) {
             catalog[current_book].year=atoi(token);
-catalog[current_book].available=1;
-catalog[current_book].lent_to=NULL;
+        catalog[current_book].available=1;
+        catalog[current_book].lent_to=NULL;
         }
         current_book++;
     }
