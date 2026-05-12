@@ -97,11 +97,10 @@ Book* read_catalog(char *catalog_file,int lines){
 void register_user(char * username){
     pthread_mutex_lock(&lib.users_lock);
 
-    // Loop up to num_users, not capacity
     for (int i = 0; i < lib.num_users; i++){
         if(strcmp(lib.users[i].username, username) == 0){
             perror("Username already taken");
-            pthread_mutex_unlock(&lib.users_lock); // Unlock before returning
+            pthread_mutex_unlock(&lib.users_lock);
             // TODO: send error to user.sh
             return;
         }
