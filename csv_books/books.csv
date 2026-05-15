@@ -1,0 +1,200 @@
+Title,Author,Year
+"The Great Gatsby","F. Scott Fitzgerald",1925
+"Dune","Frank Herbert",1965
+"1984","George Orwell",1949
+"Foundation","Isaac Asimov",1951
+"Moby Dick","Herman Melville",1851
+"Neuromancer","William Gibson",1984
+"Dracula","Bram Stoker",1897
+"Operating System Concepts","Abraham Silberschatz",2018
+"Modern Operating Systems","Andrew S. Tanenbaum",2014
+"The C Programming Language","Brian W. Kernighan",1978
+"Advanced Programming in the UNIX Environment","W. Richard Stevens",1992
+"The Mythical Man-Month","Frederick P. Brooks Jr.",1975
+"Design Patterns","Erich Gamma",1994
+"Clean Code","Robert C. Martin",2008
+"To Kill a Mockingbird","Harper Lee",1960
+"Pride and Prejudice","Jane Austen",1813
+"The Catcher in the Rye","J.D. Salinger",1951
+"The Hobbit","J.R.R. Tolkien",1937
+"Fahrenheit 451","Ray Bradbury",1953
+"Brave New World","Aldous Huxley",1932
+"Frankenstein","Mary Shelley",1818
+"The Lord of the Rings","J.R.R. Tolkien",1954
+"Jane Eyre","Charlotte Bronte",1847
+"Animal Farm","George Orwell",1945
+"Wuthering Heights","Emily Bronte",1847
+"The Picture of Dorian Gray","Oscar Wilde",1890
+"Crime and Punishment","Fyodor Dostoevsky",1866
+"The Brothers Karamazov","Fyodor Dostoevsky",1880
+"War and Peace","Leo Tolstoy",1869
+"Anna Karenina","Leo Tolstoy",1877
+"The Odyssey","Homer",-800
+"The Iliad","Homer",-750
+"Don Quixote","Miguel de Cervantes",1605
+"Ulysses","James Joyce",1922
+"Catch-22","Joseph Heller",1961
+"One Hundred Years of Solitude","Gabriel Garcia Marquez",1967
+"The Grapes of Wrath","John Steinbeck",1939
+"Of Mice and Men","John Steinbeck",1937
+"Slaughterhouse-Five","Kurt Vonnegut",1969
+"The Sound and the Fury","William Faulkner",1929
+"Beloved","Toni Morrison",1987
+"Invisible Man","Ralph Ellison",1952
+"The Stranger","Albert Camus",1942
+"The Trial","Franz Kafka",1925
+"Heart of Darkness","Joseph Conrad",1899
+"Great Expectations","Charles Dickens",1861
+"A Tale of Two Cities","Charles Dickens",1859
+"The Count of Monte Cristo","Alexandre Dumas",1844
+"Les Miserables","Victor Hugo",1862
+"Madame Bovary","Gustave Flaubert",1857
+"In Search of Lost Time","Marcel Proust",1913
+"Middlemarch","George Eliot",1871
+"The Adventures of Huckleberry Finn","Mark Twain",1884
+"The Adventures of Tom Sawyer","Mark Twain",1876
+"Alice's Adventures in Wonderland","Lewis Carroll",1865
+"Gulliver's Travels","Jonathan Swift",1726
+"Robinson Crusoe","Daniel Defoe",1719
+"Treasure Island","Robert Louis Stevenson",1883
+"The Time Machine","H.G. Wells",1895
+"The War of the Worlds","H.G. Wells",1898
+"Twenty Thousand Leagues Under the Sea","Jules Verne",1870
+"Journey to the Center of the Earth","Jules Verne",1864
+"Around the World in Eighty Days","Jules Verne",1873
+"The Hitchhiker's Guide to the Galaxy","Douglas Adams",1979
+"Ender's Game","Orson Scott Card",1985
+"Snow Crash","Neal Stephenson",1992
+"The Martian","Andy Weir",2011
+"Project Hail Mary","Andy Weir",2021
+"Leviathan Wakes","James S.A. Corey",2011
+"The Three-Body Problem","Cixin Liu",2008
+"Hyperion","Dan Simmons",1989
+"I, Robot","Isaac Asimov",1950
+"Do Androids Dream of Electric Sheep?","Philip K. Dick",1968
+"The Left Hand of Darkness","Ursula K. Le Guin",1969
+"The Dispossessed","Ursula K. Le Guin",1974
+"A Wizard of Earthsea","Ursula K. Le Guin",1968
+"The Color of Magic","Terry Pratchett",1983
+"Good Omens","Terry Pratchett and Neil Gaiman",1990
+"American Gods","Neil Gaiman",2001
+"Neverwhere","Neil Gaiman",1996
+"The Name of the Wind","Patrick Rothfuss",2007
+"The Way of Kings","Brandon Sanderson",2010
+"Mistborn","Brandon Sanderson",2006
+"A Game of Thrones","George R.R. Martin",1996
+"The Eye of the World","Robert Jordan",1990
+"Assassin's Apprentice","Robin Hobb",1995
+"The Blade Itself","Joe Abercrombie",2006
+"Lies of Locke Lamora","Scott Lynch",2006
+"The Black Company","Glen Cook",1984
+"Gardens of the Moon","Steven Erikson",1999
+"Coraline","Neil Gaiman",2002
+"The Graveyard Book","Neil Gaiman",2008
+"Harry Potter and the Sorcerer's Stone","J.K. Rowling",1997
+"The Hunger Games","Suzanne Collins",2008
+"Divergent","Veronica Roth",2011
+"The Maze Runner","James Dashner",2009
+"Percy Jackson and the Lightning Thief","Rick Riordan",2005
+"The Golden Compass","Philip Pullman",1995
+"A Wrinkle in Time","Madeleine L'Engle",1962
+"The Chronicles of Narnia","C.S. Lewis",1950
+"Matilda","Roald Dahl",1988
+"Charlie and the Chocolate Factory","Roald Dahl",1964
+"Charlotte's Web","E.B. White",1952
+"The Giver","Lois Lowry",1993
+"Holes","Louis Sachar",1998
+"Where the Wild Things Are","Maurice Sendak",1963
+"The Very Hungry Caterpillar","Eric Carle",1969
+"Goodnight Moon","Margaret Wise Brown",1947
+"The Cat in the Hat","Dr. Seuss",1957
+"Green Eggs and Ham","Dr. Seuss",1960
+"Oh, the Places You'll Go!","Dr. Seuss",1990
+"Algorithms","Robert Sedgewick",2011
+"Introduction to Algorithms","Thomas H. Cormen",1989
+"Structure and Interpretation of Computer Programs","Harold Abelson",1984
+"Artificial Intelligence: A Modern Approach","Stuart Russell",1995
+"Computer Networks","Andrew S. Tanenbaum",1981
+"Compilers: Principles, Techniques, and Tools","Alfred V. Aho",1986
+"The Pragmatic Programmer","Andrew Hunt",1999
+"Refactoring","Martin Fowler",1999
+"Code Complete","Steve McConnell",1993
+"The Art of Computer Programming","Donald E. Knuth",1968
+"Gödel, Escher, Bach","Douglas Hofstadter",1979
+"Thinking, Fast and Slow","Daniel Kahneman",2011
+"Sapiens: A Brief History of Humankind","Yuval Noah Harari",2011
+"Homo Deus","Yuval Noah Harari",2015
+"21 Lessons for the 21st Century","Yuval Noah Harari",2018
+"Outliers","Malcolm Gladwell",2008
+"The Tipping Point","Malcolm Gladwell",2000
+"Blink","Malcolm Gladwell",2005
+"Quiet","Susan Cain",2012
+"The Power of Habit","Charles Duhigg",2012
+"Atomic Habits","James Clear",2018
+"Educated","Tara Westover",2018
+"Becoming","Michelle Obama",2018
+"Born a Crime","Trevor Noah",2016
+"The Diary of a Young Girl","Anne Frank",1947
+"Night","Elie Wiesel",1956
+"Man's Search for Meaning","Viktor E. Frankl",1946
+"Into the Wild","Jon Krakauer",1996
+"Into Thin Air","Jon Krakauer",1997
+"A Brief History of Time","Stephen Hawking",1988
+"Cosmos","Carl Sagan",1980
+"The Selfish Gene","Richard Dawkins",1976
+"Guns, Germs, and Steel","Jared Diamond",1997
+"Freakonomics","Steven D. Levitt",2005
+"Thinking in Systems","Donella H. Meadows",2008
+"The Innovator's Dilemma","Clayton M. Christensen",1997
+"Zero to One","Peter Thiel",2014
+"The Lean Startup","Eric Ries",2011
+"Good to Great","Jim Collins",2001
+"Built to Last","Jim Collins",1994
+"Shoe Dog","Phil Knight",2016
+"Steve Jobs","Walter Isaacson",2011
+"Elon Musk","Ashlee Vance",2015
+"The Wright Brothers","David McCullough",2015
+"Alexander Hamilton","Ron Chernow",2004
+"Team of Rivals","Doris Kearns Goodwin",2005
+"The Immortal Life of Henrietta Lacks","Rebecca Skloot",2010
+"In Cold Blood","Truman Capote",1966
+"The Right Stuff","Tom Wolfe",1979
+"All the President's Men","Bob Woodward",1974
+"The Handmaid's Tale","Margaret Atwood",1985
+"Oryx and Crake","Margaret Atwood",2003
+"The Blind Assassin","Margaret Atwood",2000
+"Life of Pi","Yann Martel",2001
+"The Kite Runner","Khaled Hosseini",2003
+"A Thousand Splendid Suns","Khaled Hosseini",2007
+"The Book Thief","Markus Zusak",2005
+"All the Light We Cannot See","Anthony Doerr",2014
+"The Goldfinch","Donna Tartt",2013
+"The Secret History","Donna Tartt",1992
+"A Little Life","Hanya Yanagihara",2015
+"The Road","Cormac McCarthy",2006
+"Blood Meridian","Cormac McCarthy",1985
+"No Country for Old Men","Cormac McCarthy",2005
+"Dune Messiah","Frank Herbert",1969
+"Children of Dune","Frank Herbert",1976
+"God Emperor of Dune","Frank Herbert",1981
+"Heretics of Dune","Frank Herbert",1984
+"Chapterhouse: Dune","Frank Herbert",1985
+"Foundation and Empire","Isaac Asimov",1952
+"Second Foundation","Isaac Asimov",1953
+"Foundation's Edge","Isaac Asimov",1982
+"Foundation and Earth","Isaac Asimov",1986
+"Prelude to Foundation","Isaac Asimov",1988
+"Forward the Foundation","Isaac Asimov",1993
+"The Caves of Steel","Isaac Asimov",1954
+"The Naked Sun","Isaac Asimov",1957
+"The Robots of Dawn","Isaac Asimov",1983
+"Robots and Empire","Isaac Asimov",1985
+"Speaker for the Dead","Orson Scott Card",1986
+"Xenocide","Orson Scott Card",1991
+"Children of the Mind","Orson Scott Card",1996
+"Ender's Shadow","Orson Scott Card",1999
+"The Diamond Age","Neal Stephenson",1995
+"Cryptonomicon","Neal Stephenson",1999
+"Anathem","Neal Stephenson",2008
+"Seveneves","Neal Stephenson",2015
+"Fall; or, Dodge in Hell","Neal Stephenson",2019
