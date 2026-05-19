@@ -11,14 +11,14 @@ fi
 header=$(head -n 1 "$FILE")
 
 for ((i=1; i<= LIBS_NUM; ++i)); do
-    echo "$header" > "catalog$i.csv"
+    echo "$header" > "/tmp/catalog$i.csv"
 done
 
 counter = 0
 tail -n +2 "$FILE" | while read -r line; do    #the tail -n +2 starts the read from the second line of the FILE
     idx = $(( (counter%LIBS_NUM) +1 ))
 
-    echo "$line" > "catalog$idx.csv"
+    echo "$line" > "/tmp/catalog$idx.csv"
 
     ((counter++))
 done
@@ -27,7 +27,7 @@ echo "Distributed $counter books into $LIBS_NUM catalogs."
 
 for((i=1; i<=LIBS_NUM; ++i)); do
     echo "Launching Library $i..."
-    ./library "$i" "$LIBS_NUM" "catalog$i.csv" &
+    ./library "$i" "$LIBS_NUM" "/tmp/catalog$i.csv" &
 done
 
 wait  #this is done to wait for the background lib processes to be waited

@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -5,12 +6,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <unistd.h>
 #include <sys/select.h>
-
+#include <signal.h>
+#include <errno.h>
 // LOCKS MUST ALWAYS FOLLOW THIS ORDER TO PREVENT DEADLOCKS: USER, THEN BOOK
-enum Availability
-{
+enum Availability {
     available,
     lent
 };
@@ -18,6 +20,7 @@ enum Availability
 typedef struct {
     char username[100];
     char borrowed[100];
+    pthread_mutex_t lock;
 } User;
 
 typedef struct {
@@ -30,235 +33,688 @@ typedef struct {
 } Book;
 
 typedef struct {
+    int in_use;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    char response[4096];
+    int response_ready;
+} PendingRequest;
+
+typedef struct {
     int id;
     Book *catalog;
     int num_books;
-    User *users;
+    User **users;
     int num_users;
     int capacity;
-    pthread_mutex_t users_lock; //to ensure no two users are concurrently registering with the same name
-    int request_fd;
-    int response_fd;
+    pthread_mutex_t users_lock; // to ensure no two users are concurrently registering with the same name
+    int pipe_fd;
+    char pipe_path[256];
+
+    PendingRequest pending[2048]; // Just a random size for now, might change
+    atomic_int next_id;
+    pthread_t listener_thread;
+    int num_total_libraries;
 
 } Library;
 
+typedef struct {
+    char operation[32];
+    char username[100];
+    char arg1[512];
+    char arg2[512];
+    char response_pipe[256];
+} UserRequestContext;
 
 Library lib;
+// Utility funcs
 
-int count_lines(char file_name[]){
-    char c;
-    FILE *fp = fopen(file_name,"r");
-    int count =0;
-    for (c = getc(fp); c != EOF; c = getc(fp)) {
-        if (c == '\n') {
-            count++;
+User* find_user(const char*);
+Book* find_book(const char*);
+void send_message(char*, int);
+int count_lines(char[]);
+Book* read_catalog(char*, int);
+void register_user(char*, int);
+void borrow_book(char*, char*, int);
+void return_book(char*, char*, int);
+void search_book();
+void* user_request_thread(void*);
+void* library_request_thread(void*);
+void handle_user_message(char*);
+void handle_library_request(char*);
+void process_message(char*);
+void* listener_thread(void*);
+void handle_mgmt_message(char*);
+
+
+
+int main(int argc, char *argv[]) {
+    if (argc != 4)
+    {
+        fprintf(stderr, "Usage: %s <library_id> <num_libraries> <catalog_file>\n", argv[0]);
+        return 1;
+    }
+
+    // 1. Block Management Signals Early
+    // Threads inherit the signal mask of their creator. By blocking SIGUSR1 and SIGTERM 
+    // here, we guarantee that no random background worker thread gets interrupted by them.
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    sigaddset(&set, SIGTERM);
+    if (pthread_sigmask(SIG_BLOCK, &set, NULL) != 0) {
+        perror("pthread_sigmask failed");
+        return 1;
+    }
+
+    // 2. Ignore SIGPIPE Safely
+    // Prevents the library process from crashing if a client closes their response pipe early
+    signal(SIGPIPE, SIG_IGN); 
+
+    // 3. Initialize Library Metadata & Catalog
+    lib.id = atoi(argv[1]);
+    lib.num_total_libraries = atoi(argv[2]);
+    char *catalog_file = argv[3];
+    
+    lib.num_books = count_lines(catalog_file);
+    if (lib.num_books == -1) {
+        perror("Cannot read CSV catalog file");
+        return -1;
+    }
+    
+    lib.catalog = read_catalog(catalog_file, lib.num_books);
+    if (!lib.catalog)
+    {
+        fprintf(stderr, "Failed to load catalog into memory\n");
+        return 1;
+    }
+
+    // 4. Initialize User Registry
+    lib.capacity = 50;
+    lib.users = malloc(lib.capacity * sizeof(User *));
+    if (!lib.users) {
+        perror("Failed to allocate initial users array");
+        free(lib.catalog);
+        return 1;
+    }
+    lib.num_users = 0;
+    pthread_mutex_init(&lib.users_lock, NULL);
+
+    // 5. Setup the Incoming Command FIFO Command Channel
+    snprintf(lib.pipe_path, sizeof(lib.pipe_path), "/tmp/lib_cmd_%d", lib.id);
+    
+    // Clean up an old pipe node if it was left over from a crash
+    unlink(lib.pipe_path); 
+    if (mkfifo(lib.pipe_path, 0666) < 0) {
+        perror("mkfifo failed for incoming command pipeline");
+        free(lib.users);
+        free(lib.catalog);
+        return 1;
+    }
+
+    // Open in Read/Write mode so our listener thread doesn't read a constant 0 (EOF) 
+    // when individual client shell scripts disconnect.
+    lib.pipe_fd = open(lib.pipe_path, O_RDWR);
+    if (lib.pipe_fd < 0) {
+        perror("Failed to open command FIFO");
+        unlink(lib.pipe_path);
+        free(lib.users);
+        free(lib.catalog);
+        return 1;
+    }
+
+    // 6. Spawn the Background Listener Thread
+    // This thread handles incoming commands (BORROW, MGMT|LIST_BOOKS, MGMT|LIST_USERS)
+    if (pthread_create(&lib.listener_thread, NULL, listener_thread, NULL) != 0) {
+        perror("pthread_create failed for listener_thread");
+        close(lib.pipe_fd);
+        unlink(lib.pipe_path);
+        free(lib.users);
+        free(lib.catalog);
+        return 1;
+    }
+
+    // 7. Synchronous Management Loop (Main Thread)
+    // Instead of jumping into thread logs, the main thread sleeps right here until manage.sh 
+    // signals it. Because it wakes up synchronously, it is 100% safe to do file I/O and locks.
+    int sig;
+    while (1) {
+        // Blocks until SIGUSR1 or SIGTERM arrives for this process
+        sigwait(&set, &sig); 
+
+        if (sig == SIGUSR1) {
+            // FUNCTION 1: Dump structural node diagnostics
+            char filename[256];
+            snprintf(filename, sizeof(filename), "library_status_%d.txt", lib.id);
+
+            FILE *fp = fopen(filename, "w");
+            if (fp) {
+                fprintf(fp, "=== Library Node [%d] ===\n", lib.id);
+                fprintf(fp, "Status: Operational / Running\n");
+                fprintf(fp, "Active Clients Registered: %d\n", lib.num_users);
+                fprintf(fp, "Catalog Volume Size: %d\n\n", lib.num_books);
+                fclose(fp);
+            }
+        } 
+        else if (sig == SIGTERM) {
+            // FUNCTION 4: Clean up IPC system resources and shut down
+            printf("[Library %d] Received shutdown signal. Cleaning up...\n", lib.id);
+            
+            // Critical step: Dropping the file system link address off the machine layout
+            close(lib.pipe_fd);
+            unlink(lib.pipe_path);
+            
+            // Clean up allocated memory space
+            pthread_mutex_lock(&lib.users_lock);
+            for(int i = 0; i < lib.num_users; i++) {
+                pthread_mutex_destroy(&lib.users[i]->lock);
+                free(lib.users[i]);
+            }
+            free(lib.users);
+            pthread_mutex_unlock(&lib.users_lock);
+            pthread_mutex_destroy(&lib.users_lock);
+
+            for(int i = 0; i < lib.num_books; i++) {
+                pthread_mutex_destroy(&lib.catalog[i].lock);
+            }
+            free(lib.catalog);
+            
+            printf("[Library %d] Resources freed. System offline.\n", lib.id);
+            exit(0);
         }
     }
+
+    return 0; // Never reached logically
+}
+
+User *find_user(const char *username) {
+    // assumes the lib.users lock is already held by caller
+    User *user_ptr = NULL;
+    for (int i = 0; i < lib.num_users; i++)
+    {
+        if (strcmp(lib.users[i]->username, username) == 0)
+        {
+            user_ptr = lib.users[i];
+            break;
+        }
+    }
+    return user_ptr;
+}
+
+Book* find_book(const char* title) {
+    Book *book_ptr = NULL;
+    for (int i = 0; i < lib.num_books; i++)
+    {
+        if (strcmp(lib.catalog[i].name, title) == 0)
+        {
+            book_ptr = &lib.catalog[i];
+            break;
+        }
+        return book_ptr;
+}
+}
+
+void send_message(char *message, int fd) {
+    // created this so you wouldnt need to manually create a variable and calculate the length of a variable each time
+    write(fd, message, strlen(message));
+}
+
+int count_lines(char file_name[]) {
+    FILE *fp = fopen(file_name, "r");
+    if (!fp) {
+        perror(file_name);
+        return -1;
+    }
+    int count = 0;
+    int c, last = '\n';
+    for (c = getc(fp); c != EOF; c = getc(fp))
+    {
+        if (c == '\n')
+        {
+            count++;
+        }
+        last = c;
+    }
+    if(last!='\n' && last != EOF)
+        count++;
     fclose(fp);
     return count;
 }
 
-Book* read_catalog(char *catalog_file,int lines){
-    int MAX_FIELD_LENGTH=1024;
-    FILE *fp = fopen(catalog_file,"r");
-    if (!fp) return NULL;
-    Book* catalog = (Book*)malloc(lines*sizeof(Book));
+Book *read_catalog(char *catalog_file, int lines) {
+    int MAX_FIELD_LENGTH = 1024;
+    FILE *fp = fopen(catalog_file, "r");
+    if (!fp)
+        return NULL;
+    Book *catalog = (Book *)malloc(lines * sizeof(Book));
     char row[MAX_FIELD_LENGTH];
-    int current_book=0;
-    while (fgets(row, sizeof(row), fp) && current_book < lines) {
-        
+    int current_book = 0;
+    while (fgets(row, sizeof(row), fp) && current_book < lines)
+    {
+
         row[strcspn(row, "\r\n")] = 0;
-        
-        if (strlen(row) == 0) continue;
+
+        if (strlen(row) == 0)
+            continue;
 
         char *token = strtok(row, ",");
-        if (token != NULL) {
+        if (token != NULL)
+        {
             strncpy(catalog[current_book].name, token, sizeof(catalog[current_book].name) - 1);
             catalog[current_book].name[sizeof(catalog[current_book].name) - 1] = '\0';
         }
         token = strtok(NULL, ",");
-        if (token != NULL) {
-            strncpy(catalog[current_book].author, token, sizeof(catalog[current_book].name) - 1);
+        if (token != NULL)
+        {
+            strncpy(catalog[current_book].author, token, sizeof(catalog[current_book].author) - 1);
             catalog[current_book].author[sizeof(catalog[current_book].author) - 1] = '\0';
         }
         token = strtok(NULL, ",");
-        if (token != NULL) {
-            catalog[current_book].year=atoi(token);
-        catalog[current_book].available=available;
-        catalog[current_book].lent_to=NULL;
+        if (token != NULL)
+        {
+            catalog[current_book].year = atoi(token);
+            catalog[current_book].available = available;
+            catalog[current_book].lent_to[0] = '\0';
         }
-        pthread_mutex_init(&catalog[current_book].lock, NULL); //initializing per book mutex
+        pthread_mutex_init(&catalog[current_book].lock, NULL); // initializing per book mutex
         current_book++;
     }
     fclose(fp);
     return catalog;
 }
 
-void register_user(char * username){
+void register_user(char *username, int fd) {
     pthread_mutex_lock(&lib.users_lock);
 
-    for (int i = 0; i < lib.num_users; i++){
-        if(strcmp(lib.users[i].username, username) == 0){
+    for (int i = 0; i < lib.num_users; i++)
+    {
+        if (strcmp(lib.users[i]->username, username) == 0)
+        {
             perror("Username already taken");
             pthread_mutex_unlock(&lib.users_lock);
-            // TODO: send error to user.sh
+            send_message("2|User already regigstered", fd);
             return;
         }
     }
 
-    if(lib.num_users == lib.capacity){
-        lib.capacity *= 2;
-        User *temp = realloc(lib.users, lib.capacity * sizeof(User));
-        if (temp == NULL){
+    if (lib.num_users == lib.capacity)
+    {
+        int newcap = lib.capacity * 2;
+        User **tmp = realloc(lib.users, newcap * sizeof(User *));
+        if (tmp == NULL)
+        {
             perror("Failed to reallocate");
             pthread_mutex_unlock(&lib.users_lock);
-            // TODO: send error to user.sh
+            send_message("6|Failed to reallocate user list, please retry", fd);
             return;
         }
-        lib.users = temp;
+        lib.users = tmp;
+        lib.capacity = newcap;
     }
+    User *u = malloc(sizeof(User));
+    if (!u)
+    {
+        pthread_mutex_unlock(&lib.users_lock);
+        send_message("6|Malloc failed", fd);
+        return;
+    }
+    strncpy(u->username, username, sizeof(u->username) - 1);
+    u->username[sizeof(u->username) - 1] = '\0';
+    u->borrowed[0] = '\0';
+    pthread_mutex_init(&u->lock, NULL);
 
-    strncpy(lib.users[lib.num_users].username, username, 99);
-    lib.users[lib.num_users].username[99] = '\0';
-    lib.users[lib.num_users].borrowed[0] = '\0'; 
-    lib.num_users++;
-    
+    lib.users[lib.num_users++] = u;
     pthread_mutex_unlock(&lib.users_lock);
-    // TODO: send success to user.sh
+    send_message("0|User registered", fd);
 }
 
-
-void borrow_book(char* username, char* book_title){
-    Book *book_ptr = NULL;
-    for (int i = 0; i < lib.num_books; i++){
-        if (strcmp(lib.catalog[i].name, book_title) == 0){
-            book_ptr = &lib.catalog[i];
-            break;
-        }
-    }
-    
-    if(book_ptr == NULL){
-        // TODO: ask other libraries if they have the book
-    }
+// core operations
+void borrow_book(char *username, char *book_title, int fd) {
 
     // Must lock users list to safely read and prevent realloc invalidation
     pthread_mutex_lock(&lib.users_lock);
-    User *user_ptr = NULL;
-    for (int i = 0; i < lib.num_users; i++){
-        if (strcmp(lib.users[i].username, username) == 0){
-            user_ptr = &lib.users[i];
-            break;
-        }
+    User *user_ptr = find_user(username);
+    pthread_mutex_unlock(&lib.users_lock);
+
+    if (user_ptr == NULL)
+    {
+        send_message("1|No such User.", fd);
+        return;
     }
-    
-    if (user_ptr == NULL){
-        perror("No such user");
-        pthread_mutex_unlock(&lib.users_lock);
-        // TODO: send error to user.sh
+    pthread_mutex_lock(&user_ptr->lock);
+    if (user_ptr->borrowed[0] != '\0')
+    {
+        send_message("7|User has a book", fd);
+        pthread_mutex_unlock(&user_ptr->lock);
+        return;
+    }
+
+    Book *book_ptr = find_book(book_title);
+    if (book_ptr == NULL)
+    {
+        // TODO: ask other libraries if they have the book
+        pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
 
     pthread_mutex_lock(&book_ptr->lock);
-    
 
-    if(book_ptr->available == available){
-        book_ptr->available = lent; 
+    if (book_ptr->available == available)
+    {
+        book_ptr->available = lent;
         strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
         user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
         strncpy(book_ptr->lent_to, username, sizeof(book_ptr->lent_to) - 1);
-        book_ptr->lent_to[sizeof(book_ptr->lent_to)-1]='\0';
-
-    } else {
-        perror("Book is not available");
-        // TODO: handle unavailable logic
+        book_ptr->lent_to[sizeof(book_ptr->lent_to) - 1] = '\0';
     }
-    
+    else
+    {
+        perror("Book is not available");
+        send_message("4|Book not available", fd);
+    }
+    pthread_mutex_unlock(&user_ptr->lock);
     pthread_mutex_unlock(&book_ptr->lock);
-    pthread_mutex_unlock(&lib.users_lock);
 }
 
-void return_book(char * username,char* book_title)
-{
+void return_book(char *username, char *book_title, int fd) {
     pthread_mutex_lock(&lib.users_lock);
-    User *user_ptr = NULL;
-    for (int i = 0; i < lib.num_users; i++){
-        if (strcmp(lib.users[i].username, username) == 0){
-            user_ptr = &lib.users[i];
-            break;
-        }
-    }
-    if(user_ptr==NULL){
+    User *user_ptr = find_user(username);
+    pthread_mutex_unlock(&lib.users_lock);
+
+    if (user_ptr == NULL)
+    {
         perror("No such user");
-        // TODO: send error to user.sh
-        pthread_mutex_unlock(&lib.users_lock);
+        send_message("1|No such user", fd);
         return;
     }
+    // check if they have no book
+    pthread_mutex_unlock(&user_ptr->lock);
+    if ((user_ptr->borrowed)[0] == '\0')
+    {
+        send_message("5|User doesnt have a book", fd);
+        pthread_mutex_unlock(&user_ptr->lock);
+        return;
+    }
+    // check if they are trying to return the right book
+    if (strcmp(user_ptr->borrowed, book_title))
+    {
+        send_message("8|User doesnt have that book", fd);
+        pthread_mutex_unlock(&user_ptr->lock);
+        return;
+    }
+
     Book *book_ptr = NULL;
-    for (int i = 0; i < lib.num_books; i++){
-        if (strcmp(lib.catalog[i].name, book_title) == 0){
+    for (int i = 0; i < lib.num_books; i++)
+    {
+        if (strcmp(lib.catalog[i].name, book_title) == 0)
+        {
             book_ptr = &lib.catalog[i];
             break;
         }
     }
-    
-    if(book_ptr == NULL){
+
+    if (book_ptr == NULL)
+    {
         // TODO: ask other libraries if they have the book
     }
-    else{
-        phtread_mutex_lock(book_ptr->lock);
+    else
+    {
+
+        pthread_mutex_lock(&book_ptr->lock);
         book_ptr->available = available;
         strncpy(book_ptr->lent_to, "", sizeof(book_ptr->lent_to));
         strncpy(user_ptr->borrowed, "", sizeof(user_ptr->borrowed));
+        user_ptr->borrowed[0]= '\0';
         pthread_mutex_unlock(&book_ptr->lock);
+        pthread_mutex_unlock(&user_ptr->lock);
     }
-    pthread_mutex_lock(&lib.users_lock);
+    pthread_mutex_unlock(&lib.users_lock);
 }
 
-void setup_user_ipc(){
-    char request_fifo[256];
-    char response_fifo[256];
-    
-    sprintf(request_fifo, "/tmp/library_%d_request", lib->id);
-    sprintf(response_fifo, "/tmp/library_%d_response", lib->id);
+//TODO
+void search_book() { }
 
-    unlink(request_fifo);
-    unlink(response_fifo);
+// working threads
+void *user_request_thread(void *arg) {
+    UserRequestContext *ctx = (UserRequestContext *)arg;
+    char *op = ctx->operation;
+    int fd = open(ctx->response_pipe, O_WRONLY);
+    if (fd < 0) {
+        free(ctx);
+        return NULL;
+    }
 
-    if (mkfifo(request_fifo, 0666) == -1) {
-        perror("mkfifo request");
-        exit(1);
+    if (strcmp(op, "REGISTER") == 0)
+    {
+        char *username = ctx->username;
+        register_user(username, fd);
+        close(fd);
+        free(arg);
+        return NULL;
     }
-    if (mkfifo(response_fifo, 0666) == -1) {
-        perror("mkfifo response");
-        exit(1);
+    if (strcmp(op, "BORROW") == 0)
+    {
     }
-    
+    // working on it
 }
 
+//TODO
+void *library_request_thread(void *arg) { }
 
-int main(int argc, char* argv[]) {
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <library_id> <num_libraries> <catalog_file>\n", argv[0]);
-        return 1;
+// message handling
+void handle_user_message(char *message) {
+    UserRequestContext *ctx = calloc(1, sizeof(*ctx)); // calloc -> all fields zeroed, so no need to do = '\0'
+    if (!ctx)
+    {
+        perror("calloc");
+        return;
     }
 
-    //initializing library
-    lib.id = atoi(argv[1]);
-    char *catalog_file = argv[3];
-    lib.num_books = count_lines(catalog_file);
-    lib.catalog = read_catalog(catalog_file,lib.num_books);
-    if (!lib.catalog) {
-        fprintf(stderr, "Failed to load catalog\n");
-        return 1;
+    char msg_copy[4096];
+    size_t len = strnlen(message, sizeof(msg_copy) - 1);
+    memcpy(msg_copy, message, len);
+    msg_copy[len] = '\0';
+
+    char *save = NULL;
+    char *token;
+
+    // "USER" header — already verified by process_message, just consume it
+    token = strtok_r(msg_copy, "|", &save);
+    if (!token || strcmp(token, "USER") != 0)
+    {
+        free(ctx);
+        return;
     }
 
-    //Initializing user list
-    lib.capacity = 50;
-    lib.users = malloc(lib.capacity * sizeof(User));
-    lib.num_users = 0;
-    pthread_mutex_init(&lib.users_lock, NULL);
- 
+    // operation
+    token = strtok_r(NULL, "|", &save);
+    if (!token)
+    {
+        free(ctx);
+        return;
+    }
+    strncpy(ctx->operation, token, sizeof(ctx->operation) - 1);
 
+    // username
+    token = strtok_r(NULL, "|", &save);
+    if (!token)
+    {
+        free(ctx);
+        return;
+    }
+    strncpy(ctx->username, token, sizeof(ctx->username) - 1);
 
+    if (strcmp(ctx->operation, "REGISTER") == 0)
+    {
+        // USER|REGISTER|username|response_pipe
+        token = strtok_r(NULL, "|", &save);
+        if (!token)
+        {
+            free(ctx);
+            return;
+        }
+        strncpy(ctx->response_pipe, token, sizeof(ctx->response_pipe) - 1);
+    }
+    else if (strcmp(ctx->operation, "BORROW") == 0 ||
+             strcmp(ctx->operation, "RETURN") == 0)
+    {
+        // USER|<OP>|username|book_title|response_pipe
+        token = strtok_r(NULL, "|", &save);
+        if (!token)
+        {
+            free(ctx);
+            return;
+        }
+        strncpy(ctx->arg1, token, sizeof(ctx->arg1) - 1);
+
+        token = strtok_r(NULL, "|", &save);
+        if (!token)
+        {
+            free(ctx);
+            return;
+        }
+        strncpy(ctx->response_pipe, token, sizeof(ctx->response_pipe) - 1);
+    }
+    else if (strcmp(ctx->operation, "SEARCH") == 0)
+    {
+        // USER|SEARCH|username|field|value|response_pipe
+        token = strtok_r(NULL, "|", &save);
+        if (!token)
+        {
+            free(ctx);
+            return;
+        }
+        strncpy(ctx->arg1, token, sizeof(ctx->arg1) - 1);
+
+        token = strtok_r(NULL, "|", &save);
+        if (!token)
+        {
+            free(ctx);
+            return;
+        }
+        strncpy(ctx->arg2, token, sizeof(ctx->arg2) - 1);
+
+        token = strtok_r(NULL, "|", &save);
+        if (!token)
+        {
+            free(ctx);
+            return;
+        }
+        strncpy(ctx->response_pipe, token, sizeof(ctx->response_pipe) - 1);
+    }
+    else
+    {
+        free(ctx); // unknown op — don't leak
+        return;
+    }
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, user_request_thread, ctx) != 0)
+    {
+        perror("pthread_create");
+        free(ctx);
+        return;
+    }
+    pthread_detach(thread);
 }
 
+//TODO
+void handle_library_request(char *message) { }
+
+//listening
+void process_message(char *buffer) {
+    char source[32];
+    if (sscanf(buffer, "%31[^|]", source) == 1) {
+        if (strcmp(source, "USER") == 0)     { handle_user_message(buffer); }
+        if (strcmp(source, "LIBRARY") == 0)  { handle_library_request(buffer); }
+        if (strcmp(source, "MGMT") == 0)     { handle_mgmt_message(buffer); }
+    }
+}
+
+void *listener_thread(void *arg) {
+    (void)arg;
+    char buffer[4096];
+
+    while (1)
+    {
+        ssize_t n = read(lib.pipe_fd, buffer, sizeof(buffer) - 1);
+        if (n <= 0)
+        {
+            if (n == 0)
+                continue; // all writers closed; loop and retry
+            if (errno == EINTR)
+                continue; // reading got interrupted by signal
+            perror("read");
+            break;
+        }
+        buffer[n] = '\0';
+
+        char *outer_save = NULL;
+        for (char *line = strtok_r(buffer, "\n", &outer_save);
+             line != NULL;
+             line = strtok_r(NULL, "\n", &outer_save))
+        {
+            process_message(line);
+        }
+    }
+    return NULL;
+}
+
+//READ THIS
+void handle_mgmt_message(char *message) {
+    char msg_copy[4096];
+    strncpy(msg_copy, message, sizeof(msg_copy) - 1);
+    msg_copy[sizeof(msg_copy) - 1] = '\0';
+
+    char *save = NULL;
+    strtok_r(msg_copy, "|", &save); // Skip "MGMT"
+    char *op = strtok_r(NULL, "|", &save);  // Operation
+    char *res_pipe = strtok_r(NULL, "|", &save);   // path of the response pipe
+
+    if (!op || !res_pipe) return;
+
+    // --- FEATURE 2: Real-time book catalog parsing ---
+    if (strcmp(op, "LIST_BOOKS") == 0) {
+        int fd = open(res_pipe, O_WRONLY);
+        if (fd < 0) return;
+
+        char buffer[2048];
+        snprintf(buffer, sizeof(buffer), "--- Book Catalog for Library %d ---\n", lib.id);
+        write(fd, buffer, strlen(buffer));
+
+        for (int i = 0; i < lib.num_books; i++) {
+            pthread_mutex_lock(&lib.catalog[i].lock);
+            snprintf(buffer, sizeof(buffer), "  Book: \"%s\" by %s (%d) | Status: %s\n",
+                    lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year,
+                    (lib.catalog[i].available == available) ? "AVAILABLE" : "LENT OUT");
+            pthread_mutex_unlock(&lib.catalog[i].lock);
+            write(fd, buffer, strlen(buffer));
+        }
+        close(fd);
+    }
+    // --- FEATURE 3: Client indexes and borrows status ---
+    else if (strcmp(op, "LIST_USERS") == 0) {
+        int fd = open(res_pipe, O_WRONLY);
+        if (fd < 0) return;
+
+        char buffer[2048];
+        snprintf(buffer, sizeof(buffer), "=== Library %d Registered Users ===\n", lib.id);
+        write(fd, buffer, strlen(buffer));
+
+        pthread_mutex_lock(&lib.users_lock);
+        for (int i = 0; i < lib.num_users; i++) {
+            pthread_mutex_lock(&lib.users[i]->lock);
+            char state[256];
+            if (lib.users[i]->borrowed[0] == '\0') {
+                snprintf(state, sizeof(state), "No books borrowed");
+            } else {
+                snprintf(state, sizeof(state), "Borrowed: \"%s\"", lib.users[i]->borrowed);
+            }
+            snprintf(buffer, sizeof(buffer), "  User: %s | %s\n", lib.users[i]->username, state);
+            pthread_mutex_unlock(&lib.users[i]->lock);
+            write(fd, buffer, strlen(buffer));
+        }
+        pthread_mutex_unlock(&lib.users_lock);
+        close(fd);
+    }
+}
