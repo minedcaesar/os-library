@@ -10,7 +10,7 @@ $(TARGET): library.c
 	$(CC) $(CFLAGS) -o $(TARGET) library.c
 
 clean:
-	rm -f $(TARGET) catalog*.csv
+	rm -f $(TARGET) /tmp/catalog*.csv
 	#also we have to remove the IPC
 
 run: build
