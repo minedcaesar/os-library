@@ -10,14 +10,16 @@ CSV_FILE=$2
 
 mkdir -p /tmp/    # if tmp dir from root doesn't exists
 
-counter=0
-tail -n +2 "$CSV_FILE" | while read -r line; do    #the tail -n +2 starts the read from the second line of the FILE
-    idx=$(( (counter%LIBS_NUM) +1 ))
-
-    echo "$line" >> "/tmp/catalog$idx.csv"
-
-    ((counter++))
+for((i=1; i<=NUM_LIBS; ++i)); do
+    touch "/tmp/catalog$i.csv"
 done
+
+counter=0
+while read -r line; do
+    idx=$(( (counter%NUM_LIBS) + 1 ))
+    echo "$line" >> "/tmp/catalog$idx.csv"
+    ((counter++))
+done < <(tail -n +2 "$CSV_FILE")     # this obbligate to run tail into the main so that 
 
 echo "Distributed $counter books into $NUM_LIBS catalogs."
 

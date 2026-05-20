@@ -10,8 +10,7 @@ $(TARGET): library.c
 	$(CC) $(CFLAGS) -o $(TARGET) library.c
 
 clean:
-	rm -f $(TARGET) /tmp/catalog*.csv
-	#also we have to remove the IPC
+	rm -f ./$(TARGET) /tmp/catalog*.csv /tmp/lib_cmd*
 
 run: build
 	./bootstrap.sh $(ARGS)
