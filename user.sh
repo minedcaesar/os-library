@@ -65,7 +65,7 @@ function handle_search_request() {
 
     case $field in
         author|title|year)
-            request_message="SEARCH|${username}|${field}|${value}|${RESPONSE_PIPE}"
+            request_message="USER|SEARCH|${username}|${field}|${value}|${RESPONSE_PIPE}"
             echo "$request_message"
         ;;
         *)
@@ -107,7 +107,7 @@ function process_response() {
 case $operation in
     REGISTER)
         #REGISTER OPERATION
-        request_message="REGISTER|${username}|${RESPONSE_PIPE}"
+        request_message="USER|REGISTER|${username}|${RESPONSE_PIPE}"
         process_request "$request_message"
         process_response
     ;;
@@ -126,7 +126,7 @@ case $operation in
         #BORROW OPERATION
         check_num_args_for_borrow_return $#
         book_title=$4
-        request_message="BORROW|${username}|${book_title}|${RESPONSE_PIPE}"
+        request_message="USER|BORROW|${username}|${book_title}|${RESPONSE_PIPE}"
         process_request "$request_message"
         process_response
     ;;
@@ -134,7 +134,7 @@ case $operation in
         #RETURN OPERATION
         check_num_args_for_borrow_return $#
         book_title=$4
-        request_message="RETURN|${username}|${book_title}|${RESPONSE_PIPE}"
+        request_message="USER|RETURN|${username}|${book_title}|${RESPONSE_PIPE}"
         process_request "$request_message"
         process_response
     ;;
