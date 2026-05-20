@@ -19,7 +19,7 @@ while read -r line; do
     idx=$(( (counter%NUM_LIBS) + 1 ))
     echo "$line" >> "/tmp/catalog$idx.csv"
     ((counter++))
-done < <(tail -n +2 "$CSV_FILE")     # this obbligate to run tail into the main so that 
+done < <(tail -n +2 "$CSV_FILE")     # <() obbligate to treat the output as a virtual file and then load it into the while
 
 echo "Distributed $counter books into $NUM_LIBS catalogs."
 
