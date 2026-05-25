@@ -51,7 +51,6 @@ typedef struct {
     enum Outcome outcome;
     int num_requests;
     int received_responses;
-    int found;
 } PendingRequest;
 
 typedef struct {
@@ -245,16 +244,17 @@ int main(int argc, char *argv[]) {
 
 int request_id(void) {
     for (int attempt = 0; attempt < MAX_PENDING; attempt++) {
-        int idx = atomic_fetch_add(&lib.next_id, 1) % MAX_PENDING;
+        int full_id = atomic_fetch_add(&lib.next_id, 1);
+        int idx = full_id % MAX_PENDING;
         int expected = 0;
         if (atomic_compare_exchange_strong(&lib.pending[idx].in_use,
                                            &expected, 1)) {
             pthread_mutex_lock(&lib.pending[idx].lock);
             lib.pending[idx].received_responses = 0;
+            lib.pending[idx].request_id = full_id;
             lib.pending[idx].outcome = PENDING;
-            lib.pending[idx].owner_lib = -1;
             pthread_mutex_unlock(&lib.pending[idx].lock);
-            return idx;
+            return full_id;
         }
     }
     return -1;   // pool exhausted, caller must handle
@@ -283,8 +283,8 @@ Book* find_book(const char* title) {
             book_ptr = &lib.catalog[i];
             break;
         }
-        return book_ptr;
     }
+    return book_ptr;
 }
 
 void send_message(char *message, int fd) {
@@ -426,6 +426,11 @@ void borrow_book(char *username, char *book_title, int fd) {
     if (book_ptr == NULL)
     {
         int id = request_id();
+        if(id<0){
+            send_message("System busy, try again later",fd);
+            pthread_mutex_unlock(&user_ptr->lock);
+            return;
+        }
         char message[2048];
         sprintf(message, "LIB|REQUEST|%d|%d|BORROW|%s", lib.id,id, book_title);
         PendingRequest *ptr = &lib.pending[id%MAX_PENDING];
@@ -438,30 +443,43 @@ void borrow_book(char *username, char *book_title, int fd) {
             char path[256];
             snprintf(path, sizeof(path), "/tmp/lib_cmd_%d", i);
             int lib_fd = open(path, O_WRONLY);
+            if(lib_fd<0){
+                ptr->received_responses++;
+                continue;
+            }
             send_message(message, lib_fd);
+            close(lib_fd);
         }
-        while(ptr->received_responses!=ptr->num_requests && ptr->response==PENDING){
-            pthread_cond_wait(&ptr->cond, ptr->lock);
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += BROADCAST_TIMEOUT_SEC;
+
+        while (ptr->outcome == PENDING && ptr->received_responses < ptr->num_requests) {
+            int rc = pthread_cond_timedwait(&ptr->cond, &ptr->lock, &deadline);
+            if (rc == ETIMEDOUT) break;
         }
-        if(ptr->response==LENT){
+        enum Outcome outcome = ptr->outcome;
+        int responder    = ptr->response_id;
+        atomic_store(&ptr->in_use, 0);
+        pthread_mutex_unlock(&ptr->lock);
+        if(outcome==LENT){
             strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
             user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
-            user_ptr->borrowed_from_lib = ptr->response_id;
+            user_ptr->borrowed_from_lib = responder;
             send_message("0|Book has been lent",fd);
 
         }
-        if(ptr->response==ALREADY_LENT){
+        if(outcome==ALREADY_LENT){
             send_message("1|Book was already lent to another user", fd);
+        }
+        if(outcome==PENDING){
+            send_message("1|No such book.",fd);
         }
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
-    
-    pthread_mutex_unlock(&user_ptr->lock);
-    return;
-    }
 
-    pthread_mutex_lock(&book_ptr->lock);
+    pthread_mutex_lock(&(book_ptr->lock));
 
     if (book_ptr->available == available)
     {
@@ -492,7 +510,7 @@ void return_book(char *username, char *book_title, int fd) {
         return;
     }
     // check if they have no book
-    pthread_mutex_unlock(&user_ptr->lock);
+    pthread_mutex_lock(&user_ptr->lock);
     if ((user_ptr->borrowed)[0] == '\0')
     {
         send_message("5|User doesnt have a book", fd);
@@ -532,18 +550,17 @@ void return_book(char *username, char *book_title, int fd) {
         pthread_mutex_unlock(&book_ptr->lock);
         pthread_mutex_unlock(&user_ptr->lock);
     }
-    pthread_mutex_unlock(&lib.users_lock);
 }
 
 void search_book(char *username, char *field, char *value, int fd) {
     int found_any = 0; // Track if we found at least one match
 
-    char *buffer;
-    char *res;
+    char buffer[4095];
+    char res[4095];
     // 1. Check if the field is "author" (strcmp == 0 means they match)
     if (strcmp(field, "author") == 0) {
         for (int i = 0; i < lib.num_books; i++) {
-            if (strstr(lib.catalog[i].author, value) == 0) {
+            if (strstr(lib.catalog[i].author, value)) {
                 // Print the book details to the command line (cmd)
                 sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
                 strcat(res, buffer);
@@ -554,7 +571,7 @@ void search_book(char *username, char *field, char *value, int fd) {
     // 2. Check if the field is "title"
     else if (strcmp(field, "title") == 0) {
         for (int i = 0; i < lib.num_books; i++) {
-            if (strstr(lib.catalog[i].name, value) == 0) {
+            if (strstr(lib.catalog[i].name, value)) {
                 sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
                 strcat(res, buffer);
                 found_any = 1;
@@ -564,7 +581,7 @@ void search_book(char *username, char *field, char *value, int fd) {
     // 3. Check if the field is "year"
     else if (strcmp(field, "year") == 0) {
         for (int i = 0; i < lib.num_books; i++) {
-            if (strstr(lib.catalog[i].year, value) == 0) {
+            if (strstr((char*)lib.catalog[i].year, value)) { // to fix, doesnt work since year is an int.
                 sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
                 strcat(res, buffer);
                 found_any = 1;
@@ -751,8 +768,8 @@ void handle_library_request(char *message) { }
 
 void handle_pending(int id,char *response,int lib_id){ // Gets called by the listenerthread to handle responses to pending requests.
     int pending_slot = id % MAX_PENDING;
-    PendingRequest *ptr = lib.pending[pending_slot];
-    if (ptr->request_id!=id){
+    PendingRequest *ptr = &lib.pending[pending_slot];
+    if (!atomic_load(&ptr->in_use) || ptr->request_id!=id){
         return;
     }
     
@@ -761,11 +778,14 @@ void handle_pending(int id,char *response,int lib_id){ // Gets called by the lis
 
     if(strcmp(response,"GRANTED")==0){
         ptr->response_id = lib_id;
-        ptr->response = LENT;
+        ptr->outcome = LENT;
     }
     if(strcmp(response,"ALREADY_LENT")==0){
         ptr->response_id = lib_id;
-        ptr->response = ALREADY_LENT;
+        ptr->outcome = ALREADY_LENT;
+    }
+    if(ptr->outcome!=PENDING || ptr->received_responses>=ptr->num_requests){
+        pthread_cond_signal(&ptr->cond);
     }
     pthread_mutex_unlock(&ptr->lock);
 }
@@ -774,7 +794,7 @@ void process_message(char *buffer) {
     char source[32];
     if (sscanf(buffer, "%31[^|]", source) == 1) {
         if (strcmp(source, "USER") == 0)     { handle_user_message(buffer); }
-        if (strcmp(source, "LIBRARY") == 0)  { handle_library_request(buffer); }
+        if (strcmp(source, "LIB") == 0)  { handle_library_request(buffer); }
         if (strcmp(source, "MGMT") == 0)     { handle_mgmt_message(buffer); }
     }
 }
