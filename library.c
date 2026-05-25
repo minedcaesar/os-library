@@ -251,7 +251,7 @@ Book* find_book(const char* title) {
             break;
         }
         return book_ptr;
-}
+    }
 }
 
 void send_message(char *message, int fd) {
