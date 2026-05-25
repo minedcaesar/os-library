@@ -252,7 +252,7 @@ Book* find_book(const char* title) {
             break;
         }
         return book_ptr;
-}
+    }
 }
 
 void send_message(char *message, int fd) {
@@ -487,8 +487,57 @@ void return_book(char *username, char *book_title, int fd) {
     pthread_mutex_unlock(&lib.users_lock);
 }
 
-//TODO
-void search_book() { }
+void search_book(char *username, char *field, char *value, int fd) {
+    int found_any = 0; // Track if we found at least one match
+
+    char *buffer;
+    char *res;
+    // 1. Check if the field is "author" (strcmp == 0 means they match)
+    if (strcmp(field, "author") == 0) {
+        for (int i = 0; i < lib.num_books; i++) {
+            if (strstr(lib.catalog[i].author, value) == 0) {
+                // Print the book details to the command line (cmd)
+                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+                strcat(res, buffer);
+                found_any = 1;
+            }
+        }
+    }
+    // 2. Check if the field is "title"
+    else if (strcmp(field, "title") == 0) {
+        for (int i = 0; i < lib.num_books; i++) {
+            if (strstr(lib.catalog[i].name, value) == 0) {
+                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+                strcat(res, buffer);
+                found_any = 1;
+            }
+        }
+    }
+    // 3. Check if the field is "year"
+    else if (strcmp(field, "year") == 0) {
+        for (int i = 0; i < lib.num_books; i++) {
+            if (strstr(lib.catalog[i].year, value) == 0) {
+                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+                strcat(res, buffer);
+                found_any = 1;
+            }
+        }
+    }
+    // 4. Error handling for an invalid search field
+    else {
+        // Use fprintf to stderr for proper error handling
+        fprintf(stderr, "Error: '%s' is an invalid search field. (User: %s)\n", field, username);
+        return;
+    }
+
+    // 5. Manage the "proper error/status" if the field was valid but no books matched
+    if (!found_any) {
+        sprintf(buffer, "Search completed. No books found matching %s = '%s'.\n", field, value);
+        strcat(res, buffer);
+    }
+
+    send_message(res, fd);
+}
 
 // working threads
 void *user_request_thread(void *arg) {
@@ -508,8 +557,22 @@ void *user_request_thread(void *arg) {
         free(arg);
         return NULL;
     }
-    if (strcmp(op, "BORROW") == 0)
+    else if (strcmp(op, "BORROW") == 0)
     {
+
+    }
+    else if (strcmp(op, "RETURN") == 0) {
+
+    }
+    else if (strcmp(op, "SEARCH") == 0) {
+        char *username = ctx->username;
+        char *field = ctx->arg1;
+        char *arg = ctx->arg2;
+
+        search_book(username, field, arg, fd);
+    }
+    else {
+
     }
     // working on it
 }

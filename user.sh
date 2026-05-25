@@ -24,7 +24,7 @@ fi
 
 trap "rm -f $RESPONSE_PIPE" EXIT
 
-REQUEST_PIPE=/tmp/library_"$library_id"
+REQUEST_PIPE=/tmp/lib_cmd_"$library_id"
 
 function check_library_pipe_status() {
     if [ ! -p "$REQUEST_PIPE" ]; then
@@ -82,7 +82,7 @@ function process_request() {
 }
 
 function process_response() {
-    response=$(timeout 10 head -1 $RESPONSE_PIPE)
+    response=$(timeout 10 head -1 $RESPONSE_PIPE)   # here there's a problem, the search by field is not a perfect match, but result in several results, so u should do like a while -r read smth like this, a recursive read of the pipe
 
     if [ -z "$response" ]; then
         echo "ERROR: No response received from the library: $library_id"
