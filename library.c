@@ -114,6 +114,7 @@ int main(int argc, char *argv[]) {
     // 3. Initialize Library Metadata & Catalog
     lib.id = atoi(argv[1]);
     lib.num_total_libraries = atoi(argv[2]);
+    lib.next_id = 0;
     char *catalog_file = argv[3];
     
     lib.num_books = count_lines(catalog_file);
@@ -392,7 +393,22 @@ void borrow_book(char *username, char *book_title, int fd) {
     Book *book_ptr = find_book(book_title);
     if (book_ptr == NULL)
     {
-        // TODO: ask other libraries if they have the book
+        for(int i=0; i<lib.num_total_libraries; i++) {
+            
+            char addr[256];
+            sprintf(addr, sizeof(addr), "/tmp/lib_cmd_%d", i);
+
+            int fd = open(addr, O_WRONLY);
+            if (fd < 0) return;
+
+            char buffer[2048];
+            sprintf(buffer, sizeof(buffer), "LIB|REQUEST|%d|%s", lib.id, book_title);
+            pthread_mutex_lock(&lib.catalog[i].lock);
+            write(fd, buffer, strlen(buffer));
+            pthread_mutex_unlock(&lib.catalog[i].lock);
+            atomic_fetch_add(&lib.next_id, 1);
+        }
+        
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
