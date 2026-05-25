@@ -12,14 +12,24 @@
 #include <signal.h>
 #include <errno.h>
 // LOCKS MUST ALWAYS FOLLOW THIS ORDER TO PREVENT DEADLOCKS: USER, THEN BOOK
+#define MAX_PENDING 2048
+#define BROADCAST_TIMEOUT_SEC 10
+
+
 enum Availability {
     available,
     lent
 };
-
+enum Outcome
+{
+    PENDING,
+    LENT,
+    ALREADY_LENT
+};
 typedef struct {
     char username[100];
     char borrowed[100];
+    int borrowed_from_lib;
     pthread_mutex_t lock;
 } User;
 
@@ -33,11 +43,15 @@ typedef struct {
 } Book;
 
 typedef struct {
-    int in_use;
+    atomic_int in_use;
+    int request_id;
+    int response_id;
     pthread_mutex_t lock;
     pthread_cond_t cond;
-    char response[4096];
-    int response_ready;
+    enum Outcome outcome;
+    int num_requests;
+    int received_responses;
+    int found;
 } PendingRequest;
 
 typedef struct {
@@ -68,7 +82,7 @@ typedef struct {
 
 Library lib;
 // Utility funcs
-
+int request_id();
 User* find_user(const char*);
 Book* find_book(const char*);
 void send_message(char*, int);
@@ -228,6 +242,24 @@ int main(int argc, char *argv[]) {
     return 0; // Never reached logically
 }
 
+
+int request_id(void) {
+    for (int attempt = 0; attempt < MAX_PENDING; attempt++) {
+        int idx = atomic_fetch_add(&lib.next_id, 1) % MAX_PENDING;
+        int expected = 0;
+        if (atomic_compare_exchange_strong(&lib.pending[idx].in_use,
+                                           &expected, 1)) {
+            pthread_mutex_lock(&lib.pending[idx].lock);
+            lib.pending[idx].received_responses = 0;
+            lib.pending[idx].outcome = PENDING;
+            lib.pending[idx].owner_lib = -1;
+            pthread_mutex_unlock(&lib.pending[idx].lock);
+            return idx;
+        }
+    }
+    return -1;   // pool exhausted, caller must handle
+}
+
 User *find_user(const char *username) {
     // assumes the lib.users lock is already held by caller
     User *user_ptr = NULL;
@@ -363,7 +395,7 @@ void register_user(char *username, int fd) {
     u->username[sizeof(u->username) - 1] = '\0';
     u->borrowed[0] = '\0';
     pthread_mutex_init(&u->lock, NULL);
-
+    u->borrowed_from_lib = -1;
     lib.users[lib.num_users++] = u;
     pthread_mutex_unlock(&lib.users_lock);
     send_message("0|User registered", fd);
@@ -393,24 +425,40 @@ void borrow_book(char *username, char *book_title, int fd) {
     Book *book_ptr = find_book(book_title);
     if (book_ptr == NULL)
     {
-        for(int i=0; i<lib.num_total_libraries; i++) {
-            
-            char addr[256];
-            sprintf(addr, sizeof(addr), "/tmp/lib_cmd_%d", i);
-
-            int fd = open(addr, O_WRONLY);
-            if (fd < 0) return;
-
-            char buffer[2048];
-            sprintf(buffer, sizeof(buffer), "LIB|REQUEST|%d|%s", lib.id, book_title);
-            pthread_mutex_lock(&lib.catalog[i].lock);
-            write(fd, buffer, strlen(buffer));
-            pthread_mutex_unlock(&lib.catalog[i].lock);
-            atomic_fetch_add(&lib.next_id, 1);
+        int id = request_id();
+        char message[2048];
+        sprintf(message, "LIB|REQUEST|%d|%d|BORROW|%s", lib.id,id, book_title);
+        PendingRequest *ptr = &lib.pending[id%MAX_PENDING];
+        pthread_mutex_lock(&ptr->lock);
+        ptr->num_requests = lib.num_total_libraries-1;
+        for (int i = 0; i < lib.num_total_libraries;i++){
+            if(i==lib.id){
+                continue;
+            }
+            char path[256];
+            snprintf(path, sizeof(path), "/tmp/lib_cmd_%d", i);
+            int lib_fd = open(path, O_WRONLY);
+            send_message(message, lib_fd);
         }
-        
+        while(ptr->received_responses!=ptr->num_requests && ptr->response==PENDING){
+            pthread_cond_wait(&ptr->cond, ptr->lock);
+        }
+        if(ptr->response==LENT){
+            strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
+            user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
+            user_ptr->borrowed_from_lib = ptr->response_id;
+            send_message("0|Book has been lent",fd);
+
+        }
+        if(ptr->response==ALREADY_LENT){
+            send_message("1|Book was already lent to another user", fd);
+        }
         pthread_mutex_unlock(&user_ptr->lock);
         return;
+    }
+    
+    pthread_mutex_unlock(&user_ptr->lock);
+    return;
     }
 
     pthread_mutex_lock(&book_ptr->lock);
@@ -700,6 +748,27 @@ void handle_user_message(char *message) {
 //TODO
 void handle_library_request(char *message) { }
 
+
+void handle_pending(int id,char *response,int lib_id){ // Gets called by the listenerthread to handle responses to pending requests.
+    int pending_slot = id % MAX_PENDING;
+    PendingRequest *ptr = lib.pending[pending_slot];
+    if (ptr->request_id!=id){
+        return;
+    }
+    
+    pthread_mutex_lock(&ptr->lock);
+    ptr->received_responses++;
+
+    if(strcmp(response,"GRANTED")==0){
+        ptr->response_id = lib_id;
+        ptr->response = LENT;
+    }
+    if(strcmp(response,"ALREADY_LENT")==0){
+        ptr->response_id = lib_id;
+        ptr->response = ALREADY_LENT;
+    }
+    pthread_mutex_unlock(&ptr->lock);
+}
 //listening
 void process_message(char *buffer) {
     char source[32];
