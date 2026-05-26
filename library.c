@@ -585,8 +585,46 @@ void *user_request_thread(void *arg) {
 }
 
 //TODO
-void *library_request_thread(void *arg) { }
+void *library_request_thread(void *arg) {
+    LibraryRequestContext *ctx = (LibraryRequestContext *)arg;
 
+    // Spec: random 1-5 second delay before responding
+    sleep(1 + rand() % 5);
+
+    const char *outcome_str;
+    Book *book_ptr = find_book(ctx->book_title);
+
+    if (book_ptr == NULL) {
+        outcome_str = "NOT_FOUND";
+    } else {
+        pthread_mutex_lock(&book_ptr->lock);
+        if (book_ptr->availability == AVAILABLE) {
+            book_ptr->availability= LENT;
+            book_ptr->lent_to[0] = '\0';      // remote loan, no local user
+            outcome_str = "GRANTED";
+        } else {
+            outcome_str = "ALREADY_LENT";
+        }
+        pthread_mutex_unlock(&book_ptr->lock);
+    }
+
+    char response[512];
+    snprintf(response, sizeof(response),
+             "LIB|RESPONSE|%d|%d|%s\n",
+             lib.id, ctx->request_id, outcome_str);
+
+    char path[256];
+    snprintf(path, sizeof(path), "/tmp/lib_cmd_%d", ctx->src_lib);
+    int fd = open(path, O_WRONLY);
+    if (fd >= 0) {
+        send_message(response, fd);
+        close(fd);
+    }
+    // if open fails the peer is dead; they'll time out, nothing we can do
+
+    free(ctx);
+    return NULL;
+}
 // message handling
 void handle_user_message(char *message) {
     UserRequestContext *ctx = calloc(1, sizeof(*ctx)); // calloc -> all fields zeroed, so no need to do = '\0'
