@@ -33,7 +33,7 @@ typedef struct
     char name[100];
     char author[100];
     int year;
-    enum Availability available;
+    enum Availability availability;
     char lent_to[100];
     pthread_mutex_t lock;
 } Book;
