@@ -250,8 +250,8 @@ Book* find_book(const char* title) {
             book_ptr = &lib.catalog[i];
             break;
         }
-        return book_ptr;
     }
+    return book_ptr;
 }
 
 void send_message(char *message, int fd) {
@@ -369,6 +369,7 @@ void register_user(char *username, int fd) {
 }
 
 // core operations
+// smth TODO
 void borrow_book(char *username, char *book_title, int fd) {
 
     // Must lock users list to safely read and prevent realloc invalidation
@@ -416,6 +417,7 @@ void borrow_book(char *username, char *book_title, int fd) {
     pthread_mutex_unlock(&book_ptr->lock);
 }
 
+// smth TODO
 void return_book(char *username, char *book_title, int fd) {
     pthread_mutex_lock(&lib.users_lock);
     User *user_ptr = find_user(username);
@@ -428,7 +430,7 @@ void return_book(char *username, char *book_title, int fd) {
         return;
     }
     // check if they have no book
-    pthread_mutex_unlock(&user_ptr->lock);
+    pthread_mutex_lock(&user_ptr->lock);
     if ((user_ptr->borrowed)[0] == '\0')
     {
         send_message("5|User doesnt have a book", fd);
@@ -443,28 +445,20 @@ void return_book(char *username, char *book_title, int fd) {
         return;
     }
 
-    Book *book_ptr = NULL;
-    for (int i = 0; i < lib.num_books; i++)
-    {
-        if (strcmp(lib.catalog[i].name, book_title) == 0)
-        {
-            book_ptr = &lib.catalog[i];
-            break;
-        }
-    }
+    Book *book_ptr = find_book(book_title);
 
     if (book_ptr == NULL)
     {
         // TODO: ask other libraries if they have the book
+        pthread_mutex_unlock(&user_ptr->lock);
     }
     else
     {
-
         pthread_mutex_lock(&book_ptr->lock);
+
         book_ptr->available = available;
-        strncpy(book_ptr->lent_to, "", sizeof(book_ptr->lent_to));
-        strncpy(user_ptr->borrowed, "", sizeof(user_ptr->borrowed));
-        user_ptr->borrowed[0]= '\0';
+        book_ptr->lent_to[0] = '\0';
+        user_ptr->borrowed[0] = '\0';
         pthread_mutex_unlock(&book_ptr->lock);
         pthread_mutex_unlock(&user_ptr->lock);
     }
@@ -474,50 +468,41 @@ void return_book(char *username, char *book_title, int fd) {
 void search_book(char *username, char *field, char *value, int fd) {
     int found_any = 0; // Track if we found at least one match
 
-    char *buffer;
-    char *res;
-    // 1. Check if the field is "author" (strcmp == 0 means they match)
-    if (strcmp(field, "author") == 0) {
-        for (int i = 0; i < lib.num_books; i++) {
-            if (strstr(lib.catalog[i].author, value) == 0) {
-                // Print the book details to the command line (cmd)
-                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
-                strcat(res, buffer);
-                found_any = 1;
-            }
+    char buffer[2048];
+    char res[4096] = "";
+    for (int i = 0; i < lib.num_books; i++) {
+        int match = 0;
+        pthread_mutex_lock(&lib.catalog[i].lock);
+
+        if (strcmp(field, "author") == 0) {
+            if (strstr(lib.catalog[i].author, value) != NULL) match = 1;
         }
-    }
-    // 2. Check if the field is "title"
-    else if (strcmp(field, "title") == 0) {
-        for (int i = 0; i < lib.num_books; i++) {
-            if (strstr(lib.catalog[i].name, value) == 0) {
-                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
-                strcat(res, buffer);
-                found_any = 1;
-            }
+        else if (strcmp(field, "title") == 0) {
+            if (strstr(lib.catalog[i].name, value) != NULL) match = 1;
         }
-    }
-    // 3. Check if the field is "year"
-    else if (strcmp(field, "year") == 0) {
-        for (int i = 0; i < lib.num_books; i++) {
-            if (strstr(lib.catalog[i].year, value) == 0) {
-                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
-                strcat(res, buffer);
-                found_any = 1;
-            }
+        else if (strcmp(field, "year") == 0) {
+            char year_str[32];
+            snprintf(year_str, sizeof(year_str), "%d", lib.catalog[i].year);   //mismatch of data type
+            if (strstr(year_str, value) != NULL) match = 1;
         }
-    }
-    // 4. Error handling for an invalid search field
-    else {
-        // Use fprintf to stderr for proper error handling
-        fprintf(stderr, "Error: '%s' is an invalid search field. (User: %s)\n", field, username);
-        return;
+        else {
+            pthread_mutex_unlock(&lib.catalog[i].lock);
+            fprintf(stderr, "Error: '%s' is an invalid search field.\n", field);
+            send_message("9|Invalid search field", fd);
+            return;
+        }
+
+        if (match) {
+            snprintf(buffer, sizeof(buffer), "%s by %s (%d)\n", 
+                     lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+            strcat(res, buffer);
+            found_any = 1;
+        }
+        pthread_mutex_unlock(&lib.catalog[i].lock);
     }
 
-    // 5. Manage the "proper error/status" if the field was valid but no books matched
     if (!found_any) {
-        sprintf(buffer, "Search completed. No books found matching %s = '%s'.\n", field, value);
-        strcat(res, buffer);
+        snprintf(res, sizeof(res), "Search completed. No books found matching %s = '%s'.\n", field, value);
     }
 
     send_message(res, fd);
@@ -533,32 +518,25 @@ void *user_request_thread(void *arg) {
         return NULL;
     }
 
-    if (strcmp(op, "REGISTER") == 0)
-    {
-        char *username = ctx->username;
-        register_user(username, fd);
-        close(fd);
-        free(arg);
-        return NULL;
+    if (strcmp(op, "REGISTER") == 0) {
+        register_user(ctx->username, fd);
     }
-    else if (strcmp(op, "BORROW") == 0)
-    {
-
+    else if (strcmp(op, "BORROW") == 0) {
+        borrow_book(ctx->username, ctx->arg1, fd);
     }
     else if (strcmp(op, "RETURN") == 0) {
-
+        return_book(ctx->username, ctx->arg1, fd);
     }
     else if (strcmp(op, "SEARCH") == 0) {
-        char *username = ctx->username;
-        char *field = ctx->arg1;
-        char *arg = ctx->arg2;
-
-        search_book(username, field, arg, fd);
+        search_book(ctx->username, ctx->arg1, ctx->arg2, fd);
     }
     else {
-
+        send_message("9|Unknown Operation", fd);
     }
-    // working on it
+
+    close(fd);
+    free(ctx);
+    return NULL;
 }
 
 //TODO
@@ -723,7 +701,6 @@ void *listener_thread(void *arg) {
     return NULL;
 }
 
-//READ THIS
 void handle_mgmt_message(char *message) {
     char msg_copy[4096];
     strncpy(msg_copy, message, sizeof(msg_copy) - 1);
@@ -738,8 +715,25 @@ void handle_mgmt_message(char *message) {
 
     // --- FEATURE 2: Real-time book catalog parsing ---
     if (strcmp(op, "LIST_BOOKS") == 0) {
-        int fd = open(res_pipe, O_WRONLY);
-        if (fd < 0) return;
+        // PROBLEM: here can happen we hang for a bit if the manage is not reading
+        // to fix we have to put the pipe as non-blocking and do this action many times with a sleep between them...
+
+        int fd = -1;
+        
+        // Retry for up to ~100ms to allow Bash time to run 'cat'
+        for (int retries = 0; retries < 10; retries++) {
+            fd = open(res_pipe, O_WRONLY | O_NONBLOCK);
+            if (fd >= 0) {
+                break; // Success! Bash is ready.
+            }
+            usleep(10000); // Sleep for 10 milliseconds before trying again
+        }
+
+        if (fd < 0) {
+            // Bash truly abandoned the pipe or crashed
+            fprintf(stderr, "[Library %d] MGMT dropped: Pipe timeout.\n", lib.id);
+            return;
+        }
 
         char buffer[2048];
         snprintf(buffer, sizeof(buffer), "--- Book Catalog for Library %d ---\n", lib.id);
@@ -757,8 +751,23 @@ void handle_mgmt_message(char *message) {
     }
     // --- FEATURE 3: Client indexes and borrows status ---
     else if (strcmp(op, "LIST_USERS") == 0) {
-        int fd = open(res_pipe, O_WRONLY);
-        if (fd < 0) return;
+
+        int fd = -1;
+        
+        // Retry for up to ~100ms to allow Bash time to run 'cat'
+        for (int retries = 0; retries < 10; retries++) {
+            fd = open(res_pipe, O_WRONLY | O_NONBLOCK);
+            if (fd >= 0) {
+                break; // Success! Bash is ready.
+            }
+            usleep(10000); // Sleep for 10 milliseconds before trying again
+        }
+
+        if (fd < 0) {
+            // Bash truly abandoned the pipe or crashed
+            fprintf(stderr, "[Library %d] MGMT dropped: Pipe timeout.\n", lib.id);
+            return;
+        }
 
         char buffer[2048];
         snprintf(buffer, sizeof(buffer), "=== Library %d Registered Users ===\n", lib.id);

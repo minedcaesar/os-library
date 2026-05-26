@@ -12,7 +12,7 @@ case $OPERATION in
         pkill -SIGUSR1 library
         sleep 0.5
         
-        if [ -f library_status_*.txt ]; then
+        if ls library_status_*.txt 1> /dev/null 2>&1; then
             cat library_status_*.txt
         else
             echo "No operational libraries detected."
@@ -30,10 +30,13 @@ case $OPERATION in
         mkfifo "$RESP_PIPE"
 
         for id in $LIBS_FOUND; do
-            if [ -p "/tmp/lib_cmd_$id" ]; then   # -p means is a named pipe, FIFO
+            if [ -p "/tmp/lib_cmd_$id" ]; then   # -p is named pipe, FIFO
                 # Ask each library process directly via its command FIFO
                 echo "MGMT|LIST_BOOKS|$RESP_PIPE" > "/tmp/lib_cmd_$id" &
-                cat "$RESP_PIPE"
+
+                if ! timeout 2 cat "$RESP_PIPE" 2>/dev/null; then     # timeout to don't hang forever
+                    echo "[!] Library node $id timed out or failed to respond."
+                fi
             fi
         done
 
@@ -54,7 +57,10 @@ case $OPERATION in
         for id in $LIBS_FOUND; do
             if [ -p "/tmp/lib_cmd_$id" ]; then
                 echo "MGMT|LIST_USERS|$RESP_PIPE" > "/tmp/lib_cmd_$id" &
-                cat "$RESP_PIPE"
+                
+                if ! timeout 2 cat "$RESP_PIPE" 2>/dev/null; then
+                    echo "[!] Library node $id timed out or failed to respond."
+                fi
             fi
         done
 
