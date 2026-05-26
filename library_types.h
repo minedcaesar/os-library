@@ -1,0 +1,88 @@
+#ifndef LIBRARY_TYPES_H
+#define LIBRARY_TYPES_H
+
+#include <pthread.h>
+#include <stdatomic.h>
+
+#define MAX_PENDING 2048
+#define BROADCAST_TIMEOUT_SEC 10
+
+enum Availability
+{
+    AVAILABLE,
+    LENT_OUT
+};
+
+enum Outcome
+{
+    PENDING,
+    LENT,
+    ALREADY_LENT
+};
+
+typedef struct
+{
+    char username[100];
+    char borrowed[100];
+    int borrowed_from_lib;
+    pthread_mutex_t lock;
+} User;
+
+typedef struct
+{
+    char name[100];
+    char author[100];
+    int year;
+    enum Availability available;
+    char lent_to[100];
+    pthread_mutex_t lock;
+} Book;
+
+typedef struct
+{
+    atomic_int in_use;
+    int request_id;
+    int response_id;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    enum Outcome outcome;
+    int num_requests;
+    int received_responses;
+} PendingRequest;
+
+typedef struct
+{
+    int id;
+    Book *catalog;
+    int num_books;
+    User **users;
+    int num_users;
+    int capacity;
+    pthread_mutex_t users_lock;
+    int pipe_fd;
+    char pipe_path[256];
+    PendingRequest pending[MAX_PENDING];
+    atomic_int next_id;
+    pthread_t listener_thread;
+    int num_total_libraries;
+} Library;
+
+typedef struct
+{
+    char operation[32];
+    char username[100];
+    char arg1[512];
+    char arg2[512];
+    char response_pipe[256];
+} UserRequestContext;
+
+typedef struct
+{
+    int src_lib;
+    int request_id;
+    char book_title[256];
+} LibraryRequestContext;
+
+extern Library lib;
+
+#endif

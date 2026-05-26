@@ -1,4 +1,4 @@
-#define _GNU_SOURCE
+#include "library_types.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -11,73 +11,6 @@
 #include <sys/select.h>
 #include <signal.h>
 #include <errno.h>
-// LOCKS MUST ALWAYS FOLLOW THIS ORDER TO PREVENT DEADLOCKS: USER, THEN BOOK
-#define MAX_PENDING 2048
-#define BROADCAST_TIMEOUT_SEC 10
-
-
-enum Availability {
-    available,
-    lent
-};
-enum Outcome
-{
-    PENDING,
-    LENT,
-    ALREADY_LENT
-};
-typedef struct {
-    char username[100];
-    char borrowed[100];
-    int borrowed_from_lib;
-    pthread_mutex_t lock;
-} User;
-
-typedef struct {
-    char name[100];
-    char author[100];
-    int year;
-    enum Availability available;
-    char lent_to[100];
-    pthread_mutex_t lock; // per-book lock
-} Book;
-
-typedef struct {
-    atomic_int in_use;
-    int request_id;
-    int response_id;
-    pthread_mutex_t lock;
-    pthread_cond_t cond;
-    enum Outcome outcome;
-    int num_requests;
-    int received_responses;
-} PendingRequest;
-
-typedef struct {
-    int id;
-    Book *catalog;
-    int num_books;
-    User **users;
-    int num_users;
-    int capacity;
-    pthread_mutex_t users_lock; // to ensure no two users are concurrently registering with the same name
-    int pipe_fd;
-    char pipe_path[256];
-
-    PendingRequest pending[2048]; // Just a random size for now, might change
-    atomic_int next_id;
-    pthread_t listener_thread;
-    int num_total_libraries;
-
-} Library;
-
-typedef struct {
-    char operation[32];
-    char username[100];
-    char arg1[512];
-    char arg2[512];
-    char response_pipe[256];
-} UserRequestContext;
 
 Library lib;
 // Utility funcs
@@ -346,7 +279,7 @@ Book *read_catalog(char *catalog_file, int lines) {
         if (token != NULL)
         {
             catalog[current_book].year = atoi(token);
-            catalog[current_book].available = available;
+            catalog[current_book].available = AVAILABLE;
             catalog[current_book].lent_to[0] = '\0';
         }
         pthread_mutex_init(&catalog[current_book].lock, NULL); // initializing per book mutex
@@ -365,7 +298,7 @@ void register_user(char *username, int fd) {
         {
             perror("Username already taken");
             pthread_mutex_unlock(&lib.users_lock);
-            send_message("2|User already regigstered", fd);
+            send_message("2|User already registered", fd);
             return;
         }
     }
@@ -427,7 +360,7 @@ void borrow_book(char *username, char *book_title, int fd) {
     {
         int id = request_id();
         if(id<0){
-            send_message("System busy, try again later",fd);
+            send_message("6|System busy, try again later",fd);
             pthread_mutex_unlock(&user_ptr->lock);
             return;
         }
@@ -466,11 +399,11 @@ void borrow_book(char *username, char *book_title, int fd) {
             strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
             user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
             user_ptr->borrowed_from_lib = responder;
-            send_message("0|Book has been lent",fd);
+            send_message("0|Book has successfully been lent",fd);
 
         }
         if(outcome==ALREADY_LENT){
-            send_message("1|Book was already lent to another user", fd);
+            send_message("4|Book was already lent to another user", fd);
         }
         if(outcome==PENDING){
             send_message("1|No such book.",fd);
@@ -481,9 +414,9 @@ void borrow_book(char *username, char *book_title, int fd) {
 
     pthread_mutex_lock(&(book_ptr->lock));
 
-    if (book_ptr->available == available)
+    if (book_ptr->available == AVAILABLE)
     {
-        book_ptr->available = lent;
+        book_ptr->available = LENT;
         strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
         user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
         strncpy(book_ptr->lent_to, username, sizeof(book_ptr->lent_to) - 1);
@@ -525,25 +458,22 @@ void return_book(char *username, char *book_title, int fd) {
         return;
     }
 
-    Book *book_ptr = NULL;
-    for (int i = 0; i < lib.num_books; i++)
-    {
-        if (strcmp(lib.catalog[i].name, book_title) == 0)
-        {
-            book_ptr = &lib.catalog[i];
-            break;
-        }
+    if(user_ptr->borrowed_from_lib!=-1){
+        send_message()
     }
 
+    Book *book_ptr = find_book(book_title);
     if (book_ptr == NULL)
     {
-        // TODO: ask other libraries if they have the book
+        send_message("3|No such book",fd);
+        pthread_mutex_unlock(user_ptr->lock);
+        return;
     }
     else
     {
 
         pthread_mutex_lock(&book_ptr->lock);
-        book_ptr->available = available;
+        book_ptr->available = AVAILABLE;
         strncpy(book_ptr->lent_to, "", sizeof(book_ptr->lent_to));
         strncpy(user_ptr->borrowed, "", sizeof(user_ptr->borrowed));
         user_ptr->borrowed[0]= '\0';
@@ -854,7 +784,7 @@ void handle_mgmt_message(char *message) {
             pthread_mutex_lock(&lib.catalog[i].lock);
             snprintf(buffer, sizeof(buffer), "  Book: \"%s\" by %s (%d) | Status: %s\n",
                     lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year,
-                    (lib.catalog[i].available == available) ? "AVAILABLE" : "LENT OUT");
+                    (lib.catalog[i].available == AVAILABLE) ? "AVAILABLE" : "LENT OUT");
             pthread_mutex_unlock(&lib.catalog[i].lock);
             write(fd, buffer, strlen(buffer));
         }
