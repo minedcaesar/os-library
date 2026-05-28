@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 #include <time.h>
 #include "library_types.h"
 #include <stdio.h>
@@ -34,8 +34,7 @@ void handle_library_request(char*);
 void process_message(char*);
 void* listener_thread(void*);
 void handle_mgmt_message(char*);
-
-
+void handle_pending(int, char *, int);
 
 int main(int argc, char *argv[]) {
     if (argc != 4)
@@ -43,7 +42,12 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: %s <library_id> <num_libraries> <catalog_file>\n", argv[0]);
         return 1;
     }
-
+    srand(time(NULL));
+    for (int i = 0; i < MAX_PENDING; i++) {
+        pthread_mutex_init(&lib.pending[i].lock, NULL);
+        pthread_cond_init(&lib.pending[i].cond, NULL);
+        atomic_store(&lib.pending[i].in_use, 0);
+    }
     // 1. Block Management Signals Early
     // Threads inherit the signal mask of their creator. By blocking SIGUSR1 and SIGTERM 
     // here, we guarantee that no random background worker thread gets interrupted by them.
@@ -386,7 +390,7 @@ void borrow_book(char *username, char *book_title, int fd) {
             }
             char path[256];
             snprintf(path, sizeof(path), "/tmp/lib_cmd_%d", i);
-            int lib_fd = open(path, O_WRONLY);
+            int lib_fd = open(path, O_WRONLY | O_NONBLOCK); // to prevent blocking, which would lead to a deadlock with the listener
             if(lib_fd<0){
                 ptr->received_responses++;
                 continue;
@@ -428,11 +432,12 @@ void borrow_book(char *username, char *book_title, int fd) {
 
     if (book_ptr->availability == AVAILABLE)
     {
-        book_ptr->availability = LENT;
+        book_ptr->availability = LENT_OUT;
         strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
         user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
         strncpy(book_ptr->lent_to, username, sizeof(book_ptr->lent_to) - 1);
         book_ptr->lent_to[sizeof(book_ptr->lent_to) - 1] = '\0';
+        send_message("0|Success", fd);
     }
     else
     {
@@ -471,7 +476,21 @@ void return_book(char *username, char *book_title, int fd) {
     }
 
     if(user_ptr->borrowed_from_lib!=-1){
-        send_message("",1);
+        char buffer[1024];
+        sprintf(buffer,"LIB|RETURN|%d|%s", lib.id, book_title);
+        char path[1024];
+        sprintf(path,"/tmp/lib_cmd_%d", user_ptr->borrowed_from_lib);
+        int lib_fd = open(path, O_WRONLY | O_NONBLOCK);
+        if(lib_fd<0){
+            return;
+        }
+        send_message(buffer,lib_fd);
+        close(lib_fd);
+        user_ptr->borrowed[0] = '\0';
+        user_ptr->borrowed_from_lib=-1; //problem, what happens if the library sends the message, but the other doesnt receive it
+        //? the book will be permanently locked, but this is the two generals problem
+        send_message("0|Successfully returned the book", fd);
+        return;
     }
 
     Book *book_ptr = find_book(book_title);
@@ -491,6 +510,7 @@ void return_book(char *username, char *book_title, int fd) {
         user_ptr->borrowed[0]= '\0';
         pthread_mutex_unlock(&book_ptr->lock);
         pthread_mutex_unlock(&user_ptr->lock);
+        send_message("0|Success", fd);
     }
 }
 
@@ -499,12 +519,13 @@ void search_book(char *username, char *field, char *value, int fd) {
 
     char buffer[4095];
     char res[4095];
+    res[0] = '\0';
     // 1. Check if the field is "author" (strcmp == 0 means they match)
     if (strcmp(field, "author") == 0) {
         for (int i = 0; i < lib.num_books; i++) {
             if (strstr(lib.catalog[i].author, value)) {
                 // Print the book details to the command line (cmd)
-                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+                sprintf(buffer, "%s by %s (%d)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
                 strcat(res, buffer);
                 found_any = 1;
             }
@@ -514,7 +535,7 @@ void search_book(char *username, char *field, char *value, int fd) {
     else if (strcmp(field, "title") == 0) {
         for (int i = 0; i < lib.num_books; i++) {
             if (strstr(lib.catalog[i].name, value)) {
-                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+                sprintf(buffer, "%s by %s (%d)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
                 strcat(res, buffer);
                 found_any = 1;
             }
@@ -523,13 +544,15 @@ void search_book(char *username, char *field, char *value, int fd) {
     // 3. Check if the field is "year"
     else if (strcmp(field, "year") == 0) {
         for (int i = 0; i < lib.num_books; i++) {
-            if (strstr((char*)lib.catalog[i].year, value)) { // to fix, doesnt work since year is an int.
-                sprintf(buffer, "%s by %s (%s)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+            char year_str[16];
+            snprintf(year_str, sizeof(year_str), "%d", lib.catalog[i].year);
+            if (strstr(year_str, value)) {
+                sprintf(buffer, "%s by %s (%d)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
                 strcat(res, buffer);
                 found_any = 1;
             }
         }
-    }
+    }   
     // 4. Error handling for an invalid search field
     else {
         // Use fprintf to stderr for proper error handling
@@ -555,33 +578,28 @@ void *user_request_thread(void *arg) {
         free(ctx);
         return NULL;
     }
-
+    char *username = ctx->username;
+    char *arg1 = ctx->arg1;
     if (strcmp(op, "REGISTER") == 0)
     {
-        char *username = ctx->username;
+
         register_user(username, fd);
-        close(fd);
-        free(arg);
-        return NULL;
+
     }
     else if (strcmp(op, "BORROW") == 0)
     {
-
+        borrow_book(username, arg1, fd);
     }
     else if (strcmp(op, "RETURN") == 0) {
-
+        return_book(username, arg1, fd);
     }
     else if (strcmp(op, "SEARCH") == 0) {
-        char *username = ctx->username;
-        char *field = ctx->arg1;
-        char *arg = ctx->arg2;
-
-        search_book(username, field, arg, fd);
+        char *arg2 = ctx->arg2;
+        search_book(username, arg1, arg2, fd);
     }
-    else {
-
-    }
-    // working on it
+    close(fd);
+    free(arg);
+    return NULL;
 }
 
 //TODO
@@ -599,7 +617,7 @@ void *library_request_thread(void *arg) {
     } else {
         pthread_mutex_lock(&book_ptr->lock);
         if (book_ptr->availability == AVAILABLE) {
-            book_ptr->availability= LENT;
+            book_ptr->availability= LENT_OUT;
             book_ptr->lent_to[0] = '\0';      // remote loan, no local user
             outcome_str = "GRANTED";
         } else {
@@ -615,7 +633,7 @@ void *library_request_thread(void *arg) {
 
     char path[256];
     snprintf(path, sizeof(path), "/tmp/lib_cmd_%d", ctx->src_lib);
-    int fd = open(path, O_WRONLY);
+    int fd = open(path, O_WRONLY | O_NONBLOCK);
     if (fd >= 0) {
         send_message(response, fd);
         close(fd);
@@ -742,7 +760,6 @@ void handle_user_message(char *message) {
     pthread_detach(thread);
 }
 
-//TODO
 void handle_library_request(char *message) {
     char msg_copy[4096];
     size_t len = strnlen(message, sizeof(msg_copy) - 1);
@@ -750,7 +767,7 @@ void handle_library_request(char *message) {
     msg_copy[len] = '\0';
 
     char *save = NULL;
-    strtok_r(msg_copy, "|", &save);            // "LIB", already verified
+    strtok_r(msg_copy, "|", &save);
     char *kind = strtok_r(NULL, "|", &save);
     if (!kind) return;
 
@@ -805,11 +822,12 @@ void handle_library_request(char *message) {
 void handle_pending(int id,char *response,int lib_id){ // Gets called by the listenerthread to handle responses to pending requests.
     int pending_slot = id % MAX_PENDING;
     PendingRequest *ptr = &lib.pending[pending_slot];
-    if (!atomic_load(&ptr->in_use) || ptr->request_id!=id){
+    pthread_mutex_lock(&ptr->lock); 
+    if (!atomic_load(&ptr->in_use) || ptr->request_id!=id){ //stale?
+        pthread_mutex_unlock(&ptr->in_use);
         return;
     }
-    
-    pthread_mutex_lock(&ptr->lock);
+
     ptr->received_responses++;
 
     if(strcmp(response,"GRANTED")==0){
@@ -831,7 +849,18 @@ void process_message(char *buffer) {
     if (sscanf(buffer, "%31[^|]", source) == 1) {
         if (strcmp(source, "USER") == 0)     { handle_user_message(buffer); }
         if (strcmp(source, "LIB") == 0)  { handle_library_request(buffer); }
-        if (strcmp(source, "MGMT") == 0)     { handle_mgmt_message(buffer); }
+        if (strcmp(source, "MGMT") == 0) {
+            char *msg = strdup(buffer); //need to dupe because buffer is a ptr to the stack of the listener thread
+            if (!msg) return;
+
+            pthread_t t;
+            if (pthread_create(&t, NULL, mgmt_request_thread, msg) != 0) {
+                perror("pthread_create mgmt");
+                free(msg);
+                return;
+            }
+            pthread_detach(t);
+        }
     }
 }
 
@@ -864,8 +893,16 @@ void *listener_thread(void *arg) {
     return NULL;
 }
 
+
+void * mgmt_request_thread(void * arg){
+    char *msg = (char *)arg;
+    handle_mgmt_message(msg);
+    free(msg);
+    return NULL;
+}
+
 //READ THIS
-void handle_mgmt_message(char *message) {
+void handle_mgmt_message(char * message) {
     char msg_copy[4096];
     strncpy(msg_copy, message, sizeof(msg_copy) - 1);
     msg_copy[sizeof(msg_copy) - 1] = '\0';
