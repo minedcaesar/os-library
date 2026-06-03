@@ -12,8 +12,10 @@ case $OPERATION in
         pkill -SIGUSR1 library
         sleep 0.5
         
-        if [ -f library_status_*.txt ]; then
-            cat library_status_*.txt
+        shopt -s nullglob
+        files=(library_status_*.txt)
+        if (( ${#files[@]} > 0 )); then
+            cat "${files[@]}"
         else
             echo "No operational libraries detected."
         fi
