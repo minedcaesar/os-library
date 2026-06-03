@@ -8,7 +8,6 @@ fi
 NUM_LIBS=$1
 CSV_FILE=$2
 
-mkdir -p /tmp/    # if tmp dir from root doesn't exists
 
 for((i=1; i<=NUM_LIBS; ++i)); do
     touch "/tmp/catalog$i.csv"
@@ -28,6 +27,5 @@ for((i=1; i<=NUM_LIBS; ++i)); do
     ./library "$i" "$NUM_LIBS" "/tmp/catalog$i.csv" &
 done
 
-wait  #this is done to wait for the background lib processes to be waited
 
 echo "System bootstrapped with $NUM_LIBS libraries."
