@@ -82,25 +82,26 @@ function process_request() {
 }
 
 function process_response() {
-    response=$(timeout 10 head -1 $RESPONSE_PIPE)   # here there's a problem, the search by field is not a perfect match, but result in several results, so u should do like a while -r read smth like this, a recursive read of the pipe
+    local response
+    response=$(timeout 10 cat "$RESPONSE_PIPE")
 
     if [ -z "$response" ]; then
         echo "ERROR: No response received from the library: $library_id"
         exit 1
     fi
 
-    status_code=$(echo "$response" | cut -d'|' -f1)
-    message=$(echo "$response" | cut -d'|' -f2-)
+    local status_line body status_code first_msg
+    status_line=$(printf '%s\n' "$response" | head -n1)
+    body=$(printf '%s\n' "$response" | tail -n +2)
+    status_code=$(printf '%s' "$status_line" | cut -d'|' -f1)
+    first_msg=$(printf '%s' "$status_line" | cut -d'|' -f2-)
+
+    [ -n "$first_msg" ] && echo "$first_msg"
+    [ -n "$body" ]      && printf '%s\n' "$body"
 
     case $status_code in
-        0)
-        echo "$message"
-        exit 0
-        ;;
-        *)
-        echo "$message"
-        exit 1
-        ;;
+        0) exit 0 ;;
+        *) exit 1 ;;
     esac
 }
 
