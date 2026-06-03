@@ -489,7 +489,7 @@ void return_book(char *username, char *book_title, int fd) {
         close(lib_fd);
         user_ptr->borrowed[0] = '\0';
         user_ptr->borrowed_from_lib=-1; //problem, what happens if the library sends the message, but the other doesnt receive it
-        //? the book will be permanently locked, so this needs an ack functionality. we can either implement it or acknowledge it in the report 
+        //? the book will be permanently locked, but this is the two generals problem
         send_message("0|Successfully returned the book", fd);
         pthread_mutex_unlock(&user_ptr->lock);
         return;
@@ -620,7 +620,6 @@ void *library_request_thread(void *arg) {
         pthread_mutex_lock(&book_ptr->lock);
         if (book_ptr->availability == AVAILABLE) {
             book_ptr->availability= LENT_OUT;
-            book_ptr.
             book_ptr->lent_to[0] = '\0';      // remote loan, no local user
             outcome_str = "GRANTED";
         } else {
@@ -827,7 +826,7 @@ void handle_pending(int id,char *response,int lib_id){ // Gets called by the lis
     PendingRequest *ptr = &lib.pending[pending_slot];
     pthread_mutex_lock(&ptr->lock); 
     if (!atomic_load(&ptr->in_use) || ptr->request_id!=id){ //stale?
-        pthread_mutex_unlock(&ptr->lock);x
+        pthread_mutex_unlock(&ptr->lock);
         return;
     }
 
