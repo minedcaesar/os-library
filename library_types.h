@@ -35,6 +35,8 @@ typedef struct
     int year;
     enum Availability availability;
     char lent_to[100];
+    int lent_to_lib;
+    int request_id;
     pthread_mutex_t lock;
 } Book;
 
