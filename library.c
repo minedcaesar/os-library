@@ -385,7 +385,7 @@ void borrow_book(char *username, char *book_title, int fd) {
         PendingRequest *ptr = &lib.pending[id%MAX_PENDING];
         pthread_mutex_lock(&ptr->lock);
         ptr->num_requests = lib.num_total_libraries-1; //sending a message to all other libraries
-        for (int i = 0; i < lib.num_total_libraries;i++){
+        for (int i = 1; i < lib.num_total_libraries+1;i++){
             if(i==lib.id){
                 continue;
             }
