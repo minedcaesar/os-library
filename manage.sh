@@ -19,8 +19,9 @@ case $OPERATION in
         else
             echo "No operational libraries detected."
         fi
-        ;;
         
+        rm -f library_status_*.txt
+        ;;
     "list_books")
         echo "Fetching real-time book catalogs..."
         if [ -z "$LIBS_FOUND" ]; then    # -z means is empty

@@ -182,6 +182,14 @@ int main(int argc, char *argv[]) {
     return 0; // Never reached logically
 }
 
+static char *unquote(char *s) {
+    size_t n = strlen(s);
+    if (n >= 2 && s[0] == '"' && s[n - 1] == '"') {
+        s[n - 1] = '\0';
+        return s + 1;
+    }
+    return s;
+}
 
 int request_id(void) {
     for (int attempt = 0; attempt < MAX_PENDING; attempt++) {
@@ -272,14 +280,14 @@ Book *read_catalog(char *catalog_file, int lines) {
             continue;
 
         char *token = strtok(row, ",");
-        if (token != NULL)
-        {
+        if (token != NULL) {
+            token = unquote(token);
             strncpy(catalog[current_book].name, token, sizeof(catalog[current_book].name) - 1);
             catalog[current_book].name[sizeof(catalog[current_book].name) - 1] = '\0';
         }
         token = strtok(NULL, ",");
-        if (token != NULL)
-        {
+        if (token != NULL) {
+            token = unquote(token);
             strncpy(catalog[current_book].author, token, sizeof(catalog[current_book].author) - 1);
             catalog[current_book].author[sizeof(catalog[current_book].author) - 1] = '\0';
         }
@@ -385,7 +393,7 @@ void borrow_book(char *username, char *book_title, int fd) {
         PendingRequest *ptr = &lib.pending[id%MAX_PENDING];
         pthread_mutex_lock(&ptr->lock);
         ptr->num_requests = lib.num_total_libraries-1; //sending a message to all other libraries
-        for (int i = 0; i < lib.num_total_libraries;i++){
+        for (int i = 1; i < lib.num_total_libraries+1;i++){
             if(i==lib.id){
                 continue;
             }
@@ -517,6 +525,18 @@ void return_book(char *username, char *book_title, int fd) {
     }
 }
 
+static int matches(const Book *b, int by_author, int by_title,
+                   int by_year, const char *value) {
+    if (by_author) return strstr(b->author, value) != NULL;
+    if (by_title)  return strstr(b->name,   value) != NULL;
+    if (by_year) {
+        char ys[16];
+        snprintf(ys, sizeof(ys), "%d", b->year);
+        return strstr(ys, value) != NULL;
+    }
+    return 0;
+}
+
 void search_book(char *username, char *field, char *value, int fd) {
     (void)username;
 
@@ -531,35 +551,26 @@ void search_book(char *username, char *field, char *value, int fd) {
         return;
     }
 
-    char body[4096];
-    body[0] = '\0';
     int found = 0;
+    for (int i = 0; i < lib.num_books && !found; i++)
+        found = matches(&lib.catalog[i], by_author, by_title, by_year, value);
 
+    if (!found) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "0|No books found matching %s = '%s'\n", field, value);
+        send_message(msg, fd);
+        return;
+    }
+
+    send_message("0|Search results:\n", fd);          // status line first
     for (int i = 0; i < lib.num_books; i++) {
-        const char *haystack;
-        char year_str[16];
-        if      (by_author) haystack = lib.catalog[i].author;
-        else if (by_title)  haystack = lib.catalog[i].name;
-        else {
-            snprintf(year_str, sizeof(year_str), "%d", lib.catalog[i].year);
-            haystack = year_str;
-        }
-
-        if (strstr(haystack, value)) {
+        if (matches(&lib.catalog[i], by_author, by_title, by_year, value)) {
             char line[512];
             snprintf(line, sizeof(line), "%s by %s (%d)\n",
                      lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
-            strncat(body, line, sizeof(body) - strlen(body) - 1);
-            found = 1;
+            send_message(line, fd);                    // one write per match
         }
     }
-
-    char res[4160];
-    if (!found)
-        snprintf(res, sizeof(res), "0|No books found matching %s = '%s'\n", field, value);
-    else
-        snprintf(res, sizeof(res), "0|Search results:\n%s", body);
-    send_message(res, fd);
 }
 // working threads
 void *user_request_thread(void *arg) {
