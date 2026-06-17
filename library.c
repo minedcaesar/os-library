@@ -464,7 +464,7 @@ void borrow_book(char *username, char *book_title, int fd) {
     {
         enum Outcome outcome;
         int lib_responder =-1;
-        if (lib_request(BROADCAST_ALL, &outcome, &responder, "BORROW|%s", book_title) < 0) {
+        if (lib_request(BROADCAST_ALL, &outcome, &lib_responder, "BORROW|%s", book_title) < 0) {
             send_message("6|System busy, try again later", fd);
             pthread_mutex_unlock(&user_ptr->lock);
             return;
@@ -472,7 +472,7 @@ void borrow_book(char *username, char *book_title, int fd) {
               if (outcome == LENT) {
             strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
             user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
-            user_ptr->borrowed_from_lib = responder;
+            user_ptr->borrowed_from_lib = lib_responder;
             send_message("0|Book has successfully been lent", fd);
         }
         else if (outcome == ALREADY_LENT) {
@@ -489,52 +489,56 @@ void borrow_book(char *username, char *book_title, int fd) {
     sleep(1 + rand()%5);
     pthread_mutex_lock(&(book_ptr->lock));
 
-    if(book_ptr->availability=LENT_OUT)
-    {
-        if(book_ptr->lent_to_lib!=-1){
-            if(book_ptr->really_lent==1){
-                send_message("4|Book not available", fd);
-            }
-            else{
-                //LIB|VERIFY|BOOK_NAME|USER
-                enum Outcome outcome;
-                int responder = -1;
-                if (lib_request(book_ptr->lent_to_lib, &outcome, &responder, "VERIFY|%s|%s",book_ptr->name,book_ptr->lent_to) < 0) {
-                    send_message("6|System busy, try again later", fd);
-                    pthread_mutex_unlock(&user_ptr->lock);
-                    return;
-                }
-                if(outcome==HELD){
-                    book_ptr->really_lent = 1;
-                    send_message("4|Book not available", fd);
-                    pthread_mutex_unlock(&book_ptr->lock);
-                    pthread_mutex_unlock(%user_ptr)
-                    return;
-                    }
-                else
-                {
-                    book_ptr->lent_to = "";
-                    book_ptr->really_lent = 0;
-                    book_ptr->lent_to_lib = -1;
-                    book_ptr->availability = AVAILABLE;
-                    break;
-                }
-            }
-        else{
-            send_message("4|Book not available", fd);
+    if (book_ptr->availability == LENT_OUT) {
+        if (book_ptr->lent_to_lib == -1 || book_ptr->really_lent == 1) {
+            send_message("4|Book not available", fd);                 // local or confirmed -> refuse
             pthread_mutex_unlock(&book_ptr->lock);
-            pthread_mutex_unlock(% user_ptr);
+            pthread_mutex_unlock(&user_ptr->lock);
             return;
-        }}
-    else if(book_ptr->availability==AVAILABLE){
-        book_ptr->availability = LENT_OUT;
-        strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
-        user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
-        strncpy(book_ptr->lent_to, username, sizeof(book_ptr->lent_to) - 1);
-        book_ptr->lent_to[sizeof(book_ptr->lent_to) - 1] = '\0';
-        send_message("0|Success", fd);
         }
-}
+        // unconfirmed remote loan -> verify without the lock
+        int  target = book_ptr->lent_to_lib;
+        char title[100], borrower[100];
+        strncpy(title, book_ptr->name, sizeof(title)-1);       title[sizeof(title)-1]='\0';
+        strncpy(borrower, book_ptr->lent_to, sizeof(borrower)-1); borrower[sizeof(borrower)-1]='\0';
+        pthread_mutex_unlock(&book_ptr->lock);
+
+        enum Outcome o; int who = -1;
+        int rc = lib_request(target, &o, &who, "VERIFY|%s|%s", title, borrower);
+
+        pthread_mutex_lock(&book_ptr->lock);
+        // only apply the verdict if nothing changed under us
+        if (book_ptr->availability == LENT_OUT &&
+            book_ptr->lent_to_lib == target && book_ptr->really_lent == 0) {
+            if (rc == 0 && o == NOT_HELD) {
+                book_ptr->availability = AVAILABLE;   // reclaim, then fall through ↓
+            } else {
+                if (o == HELD) book_ptr->really_lent = 1;
+                send_message("4|Book not available", fd);   
+                pthread_mutex_unlock(&book_ptr->lock);
+                pthread_mutex_unlock(&user_ptr->lock);
+                return;
+            }
+        }
+        // else: returned or resolved by another thread -> let the block below re-read availability
+    }
+
+    // 2. Single local-lend path: original AVAILABLE, reclaimed, or returned-while-we-waited.
+    if (book_ptr->availability == AVAILABLE) {
+        book_ptr->availability = LENT_OUT;
+        book_ptr->lent_to_lib  = -1;        // it's a local loan now
+        book_ptr->really_lent  = 0;
+        strncpy(book_ptr->lent_to, username, sizeof(book_ptr->lent_to)-1);
+        book_ptr->lent_to[sizeof(book_ptr->lent_to)-1]='\0';
+        strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed)-1);
+        user_ptr->borrowed[sizeof(user_ptr->borrowed)-1]='\0';
+        send_message("0|Success", fd);
+    } else {
+        send_message("4|Book not available", fd);  // someone else re-lent it during our verify
+    }
+    pthread_mutex_unlock(&book_ptr->lock);
+    pthread_mutex_unlock(&user_ptr->lock);
+    return;
 
 void return_book(char *username, char *book_title, int fd) {
 
@@ -698,10 +702,12 @@ void *borrow_request_thread(void *arg) {
         pthread_mutex_lock(&book_ptr->lock);
         if (book_ptr->availability == AVAILABLE) {
             book_ptr->availability= LENT_OUT;
-            book_ptr->lent_to[0] = '\0';      // remote loan, no local user
+            book_ptr->lent_to[0] = 'ctx.';      // add name of the borrower
             outcome_str = "GRANTED";
+            book_ptr->lent_to_lib = ctx->src_lib;
+            book_ptr->really_lent = 0;
         } else {
-            outcome_str = "ALREADY_LENT";
+            outcome_str = "ALREADY_LENT"; // should try to recover?
         }
         pthread_mutex_unlock(&book_ptr->lock);
     }
@@ -726,17 +732,23 @@ void *borrow_request_thread(void *arg) {
 void *verify_request_thread(void *arg){
     VerifyContext *vericontext = (VerifyContext *)arg;
     pthread_mutex_lock(&lib.users_lock);
-    User *user_ptr = find_user(vericontext.username);
+    User *user_ptr = find_user(vericontext->username);
     pthread_mutex_unlock(&lib.users_lock);
     char message[1024];
     if(user_ptr==NULL){
-        sprintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n", lib.id, vericontext.request_id, "not_held");
+        sprintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n", lib.id, vericontext->request_id, "NOT_HELD");
     }
     else{
-        pthread_mutex_lock(&user_ptr.lock);
-        if(strcmp(user_ptr.borrowed,vericontext.))
+        pthread_mutex_lock(&user_ptr->lock);
+        if(strcmp(user_ptr->borrowed,vericontext->book_title)==0){
+            snrintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n", lib.id, vericontext->request_id, "HELD");
+        }
+        else{
+            snprintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n", lib.id, vericontext->request_id, "NOT_HELD");
+        }
     }
-    send_to_library(vericontext.src_lib, message);
+    send_to_library(vericontext->src_lib, message);
+    pthread_mutex_unlock(&user_ptr->lock);
 }
 // message handling
 void handle_user_message(char *message) {
@@ -947,6 +959,14 @@ void handle_pending(int id,char *response,int lib_id){ // Gets called by the lis
     if(strcmp(response,"ALREADY_LENT")==0){
         ptr->response_id = lib_id;
         ptr->outcome = ALREADY_LENT;
+    }
+    if(strcmp(response,"HELD")==0){
+        ptr->response_id = lib_id;
+        ptr->outcome = HELD;
+    }
+    if(strcmp(response,"NOT_HELD")==0){
+        ptr->response_id = lib_id;
+        ptr->outcome = NOT_HELD;
     }
     if(ptr->outcome!=PENDING || ptr->received_responses>=ptr->num_requests){
         pthread_cond_signal(&ptr->cond);
