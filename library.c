@@ -29,6 +29,8 @@ void borrow_book(char*, char*, int);
 void return_book(char*, char*, int);
 void search_book();
 void* user_request_thread(void*);
+int lib_request(int, enum Outcome*, int*, const char*, ...)
+    __attribute__((format(printf, 4, 5)));
 void* library_request_thread(void*);
 void handle_user_message(char*);
 void handle_library_request(char*);
@@ -37,6 +39,8 @@ void* listener_thread(void*);
 void handle_mgmt_message(char*);
 void handle_pending(int, char *, int);
 void *mgmt_request_thread(void *);
+int matches(const Book *, int, int, int, const char *);
+char *unquote(char*);
 
 int main(int argc, char *argv[]) {
     if (argc != 4)
@@ -184,8 +188,77 @@ int main(int argc, char *argv[]) {
 
     return 0; // Never reached logically
 }
+// Opens a peer library's command FIFO, writes msg, and closes it. Non-blocking, so a
+// busy or dead peer never stalls us (and never deadlocks against our own listener).
+// Returns 0 on success, -1 if the peer is unreachable.
+int send_to_library(int lib_id, const char *msg) {
+    char path[256];
+    snprintf(path, sizeof(path), "/tmp/lib_cmd_%d", lib_id);
+    int fd = open(path, O_WRONLY | O_NONBLOCK);
+    if (fd < 0)
+        return -1;
+    write(fd, msg, strlen(msg));
+    close(fd);
+    return 0;
+}
 
-static char *unquote(char *s) {
+// Issues an inter-library request and blocks until a verdict arrives or
+// BROADCAST_TIMEOUT_SEC elapses (TTL). The wire message is
+// "LIB|REQUEST|<self>|<id>|<payload>\n": the function owns the header, id and framing
+// (so responses route back correctly), while the caller crafts the payload via fmt/...
+// e.g. lib_request(BROADCAST_ALL, &o, &r, "BORROW|%s", title).
+//   target    : a specific peer id, or BROADCAST_ALL to contact every other library.
+//   outcome   : out — LENT / ALREADY_LENT, or PENDING if it timed out / nobody answered.
+//   responder : out — id that produced the verdict (meaningful for LENT / ALREADY_LENT).
+// Returns 0 on success, or -1 if the pending-request pool is exhausted.
+int lib_request(int target, enum Outcome *outcome, int *responder,
+                const char *fmt, ...) {
+    int id = request_id();
+    if (id < 0)
+        return -1;
+
+    char payload[2000];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(payload, sizeof(payload), fmt, ap);
+    va_end(ap);
+
+    char message[2048];
+    snprintf(message, sizeof(message), "LIB|REQUEST|%d|%d|%s\n", lib.id, id, payload);
+
+    PendingRequest *ptr = &lib.pending[id % MAX_PENDING];
+    pthread_mutex_lock(&ptr->lock);
+
+    if (target == BROADCAST_ALL) {
+        ptr->num_requests = lib.num_total_libraries - 1;
+        for (int i = 1; i <= lib.num_total_libraries; i++) {
+            if (i == lib.id)
+                continue;
+            if (send_to_library(i, message) < 0)
+                ptr->received_responses++;   // unreachable peer counts as already answered
+        }
+    } else {
+        ptr->num_requests = 1;
+        if (send_to_library(target, message) < 0)
+            ptr->received_responses++;
+    }
+
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += BROADCAST_TIMEOUT_SEC;
+
+    while (ptr->outcome == PENDING && ptr->received_responses < ptr->num_requests) {
+        if (pthread_cond_timedwait(&ptr->cond, &ptr->lock, &deadline) == ETIMEDOUT)
+            break;
+    }
+
+    *outcome   = ptr->outcome;
+    *responder = ptr->response_id;
+    atomic_store(&ptr->in_use, 0);
+    pthread_mutex_unlock(&ptr->lock);
+    return 0;
+}
+char *unquote(char *s) {
     size_t n = strlen(s);
     if (n >= 2 && s[0] == '"' && s[n - 1] == '"') {
         s[n - 1] = '\0';
@@ -265,13 +338,17 @@ int count_lines(char file_name[]) {
     fclose(fp);
     return count;
 }
-
+//reads from a catalog txt file and returns a Book* catalog.
 Book *read_catalog(char *catalog_file, int lines) {
     int MAX_FIELD_LENGTH = 1024;
     FILE *fp = fopen(catalog_file, "r");
     if (!fp)
         return NULL;
     Book *catalog = (Book *)malloc(lines * sizeof(Book));
+    if (catalog == NULL){
+        //needs to send some sort of error
+        return NULL;
+    }
     char row[MAX_FIELD_LENGTH];
     int current_book = 0;
     while (fgets(row, sizeof(row), fp) && current_book < lines)
@@ -307,7 +384,7 @@ Book *read_catalog(char *catalog_file, int lines) {
     fclose(fp);
     return catalog;
 }
-
+// adds user to lib.users
 void register_user(char *username, int fd) {
     sleep(1 + rand() % 5);
     pthread_mutex_lock(&lib.users_lock);
@@ -385,82 +462,78 @@ void borrow_book(char *username, char *book_title, int fd) {
      */
     if (book_ptr == NULL)
     {
-        //creates id in order to issue a pending[] request.
-        int id = request_id();
-        if(id<0){
-            send_message("6|System busy, try again later",fd);
+        enum Outcome outcome;
+        int lib_responder =-1;
+        if (lib_request(BROADCAST_ALL, &outcome, &responder, "BORROW|%s", book_title) < 0) {
+            send_message("6|System busy, try again later", fd);
             pthread_mutex_unlock(&user_ptr->lock);
             return;
         }
-        char message[2048];
-        sprintf(message, "LIB|REQUEST|%d|%d|BORROW|%s", lib.id, id, book_title);
-        PendingRequest *ptr = &lib.pending[id%MAX_PENDING];
-        pthread_mutex_lock(&ptr->lock);
-        ptr->num_requests = lib.num_total_libraries-1; //sending a message to all other libraries
-        for (int i = 1; i < lib.num_total_libraries+1;i++){
-            if(i==lib.id){
-                continue;
-            }
-            char path[256];
-            snprintf(path, sizeof(path), "/tmp/lib_cmd_%d", i);
-            int lib_fd = open(path, O_WRONLY | O_NONBLOCK); // to prevent blocking, which would lead to a deadlock with the listener
-            if(lib_fd<0){
-                ptr->received_responses++;
-                continue;
-            }
-            send_message(message, lib_fd);
-            close(lib_fd);
-        }
-
-        //TTL for the messages
-        struct timespec deadline;
-        clock_gettime(CLOCK_REALTIME, &deadline);
-        deadline.tv_sec += BROADCAST_TIMEOUT_SEC;
-
-        while (ptr->outcome == PENDING && ptr->received_responses < ptr->num_requests) {
-            int rc = pthread_cond_timedwait(&ptr->cond, &ptr->lock, &deadline);   // wait with timeout
-            if (rc == ETIMEDOUT) break;
-        }
-        enum Outcome outcome = ptr->outcome;
-        int responder = ptr->response_id;
-        atomic_store(&ptr->in_use, 0);
-        pthread_mutex_unlock(&ptr->lock);
-        if(outcome==LENT){
+              if (outcome == LENT) {
             strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
-            user_ptr->borrowed[sizeof(user_ptr->borrowed) -1] = '\0';
+            user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
             user_ptr->borrowed_from_lib = responder;
             send_message("0|Book has successfully been lent", fd);
         }
-        if(outcome==ALREADY_LENT){
+        else if (outcome == ALREADY_LENT) {
             send_message("4|Book was already lent to another user", fd);
         }
-        if(outcome==PENDING){
+        else { // PENDING — timed out, or nobody had the book
             send_message("1|No such book.", fd);
         }
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
     // CASE B — Book is in *this* library's catalog. Local borrow.
-
+    
     sleep(1 + rand()%5);
     pthread_mutex_lock(&(book_ptr->lock));
 
-    if (book_ptr->availability == AVAILABLE)
+    if(book_ptr->availability=LENT_OUT)
     {
+        if(book_ptr->lent_to_lib!=-1){
+            if(book_ptr->really_lent==1){
+                send_message("4|Book not available", fd);
+            }
+            else{
+                //LIB|VERIFY|BOOK_NAME|USER
+                enum Outcome outcome;
+                int responder = -1;
+                if (lib_request(book_ptr->lent_to_lib, &outcome, &responder, "VERIFY|%s|%s",book_ptr->name,book_ptr->lent_to) < 0) {
+                    send_message("6|System busy, try again later", fd);
+                    pthread_mutex_unlock(&user_ptr->lock);
+                    return;
+                }
+                if(outcome==HELD){
+                    book_ptr->really_lent = 1;
+                    send_message("4|Book not available", fd);
+                    pthread_mutex_unlock(&book_ptr->lock);
+                    pthread_mutex_unlock(%user_ptr)
+                    return;
+                    }
+                else
+                {
+                    book_ptr->lent_to = "";
+                    book_ptr->really_lent = 0;
+                    book_ptr->lent_to_lib = -1;
+                    book_ptr->availability = AVAILABLE;
+                    break;
+                }
+            }
+        else{
+            send_message("4|Book not available", fd);
+            pthread_mutex_unlock(&book_ptr->lock);
+            pthread_mutex_unlock(% user_ptr);
+            return;
+        }}
+    else if(book_ptr->availability==AVAILABLE){
         book_ptr->availability = LENT_OUT;
         strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
         user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
         strncpy(book_ptr->lent_to, username, sizeof(book_ptr->lent_to) - 1);
         book_ptr->lent_to[sizeof(book_ptr->lent_to) - 1] = '\0';
         send_message("0|Success", fd);
-    }
-    else
-    {
-        perror("Book is not available");
-        send_message("4|Book not available", fd);
-    }
-    pthread_mutex_unlock(&user_ptr->lock);
-    pthread_mutex_unlock(&book_ptr->lock);
+        }
 }
 
 void return_book(char *username, char *book_title, int fd) {
@@ -494,7 +567,7 @@ void return_book(char *username, char *book_title, int fd) {
 
     if(user_ptr->borrowed_from_lib!=-1){
         char buffer[1024];
-        sprintf(buffer,"LIB|RETURN|%d|%s", lib.id, book_title);
+        sprintf(buffer,"LIB|RETURN|%d|%s\n", lib.id, book_title);
         char path[1024];
         sprintf(path,"/tmp/lib_cmd_%d", user_ptr->borrowed_from_lib);
         int lib_fd = open(path, O_WRONLY | O_NONBLOCK);
@@ -533,7 +606,7 @@ void return_book(char *username, char *book_title, int fd) {
     }
 }
 
-static int matches(const Book *b, int by_author, int by_title, int by_year, const char *value) {
+int matches(const Book *b, int by_author, int by_title, int by_year, const char *value) {
     if (by_author) return strstr(b->author, value) != NULL;
     if (by_title)  return strstr(b->name,   value) != NULL;
     if (by_year) {
@@ -821,6 +894,9 @@ void handle_library_request(char *message) {
         book_ptr->availability = AVAILABLE;
         book_ptr->lent_to[0] = '\0';
         pthread_mutex_unlock(&book_ptr->lock);
+    }
+    else if (strcmp(kind, "VERIFY") == 0){
+        
     }
 }
 

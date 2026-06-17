@@ -5,8 +5,10 @@
 #include <stdatomic.h>
 
 #define MAX_PENDING 2048
-#define BROADCAST_TIMEOUT_SEC 8   // so smaller than user.sh timeout
+#define BROADCAST_TIMEOUT_SEC 8 // so smaller than user.sh timeout
 
+
+#define BROADCAST_ALL 0   /* target id meaning "contact every other library" (ids start at 1) */
 // book status
 enum Availability
 {
@@ -19,7 +21,9 @@ enum Outcome
 {
     PENDING,
     LENT,
-    ALREADY_LENT
+    ALREADY_LENT,
+    HELD,        // verify: borrower confirms it really holds the book
+    NOT_HELD,    // verify: borrower doesn't have it -> safe to reclaim
 };
 
 // user entity
@@ -37,6 +41,8 @@ typedef struct
     char name[100];
     char author[100];
     int year;
+    int lent_to_lib;
+    int really_lent;
     enum Availability availability;
     char lent_to[100];
     pthread_mutex_t lock;
@@ -54,13 +60,12 @@ typedef struct
     int received_responses;
 } PendingRequest;
 
-
 typedef struct
 {
     int id;
     Book *catalog;
     int num_books;
-    User **users;  // pointer of the vector of users
+    User **users; // pointer of the vector of users
     int num_users;
     int capacity;
     pthread_mutex_t users_lock;
