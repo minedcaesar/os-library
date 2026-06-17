@@ -5,14 +5,16 @@
 #include <stdatomic.h>
 
 #define MAX_PENDING 2048
-#define BROADCAST_TIMEOUT_SEC 10
+#define BROADCAST_TIMEOUT_SEC 8   // so smaller than user.sh timeout
 
+// book status
 enum Availability
 {
     AVAILABLE,
     LENT_OUT
 };
 
+// request to another lib
 enum Outcome
 {
     PENDING,
@@ -20,6 +22,7 @@ enum Outcome
     ALREADY_LENT
 };
 
+// user entity
 typedef struct
 {
     char username[100];
@@ -28,6 +31,7 @@ typedef struct
     pthread_mutex_t lock;
 } User;
 
+// book entity
 typedef struct
 {
     char name[100];
@@ -50,19 +54,20 @@ typedef struct
     int received_responses;
 } PendingRequest;
 
+
 typedef struct
 {
     int id;
     Book *catalog;
     int num_books;
-    User **users;
+    User **users;  // pointer of the vector of users
     int num_users;
     int capacity;
     pthread_mutex_t users_lock;
     int pipe_fd;
     char pipe_path[256];
     PendingRequest pending[MAX_PENDING];
-    atomic_int next_id;
+    atomic_int next_id; // unique id for requests
     pthread_t listener_thread;
     int num_total_libraries;
 } Library;

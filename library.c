@@ -16,6 +16,7 @@
 
 
 Library lib;
+
 // Utility funcs
 int request_id();
 User* find_user(const char*);
@@ -43,12 +44,14 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: %s <library_id> <num_libraries> <catalog_file>\n", argv[0]);
         return 1;
     }
+
     srand(time(NULL));
     for (int i = 0; i < MAX_PENDING; i++) {
         pthread_mutex_init(&lib.pending[i].lock, NULL);
         pthread_cond_init(&lib.pending[i].cond, NULL);
         atomic_store(&lib.pending[i].in_use, 0);
     }
+
     // 1. Block Management Signals Early
     // Threads inherit the signal mask of their creator. By blocking SIGUSR1 and SIGTERM 
     // here, we guarantee that no random background worker thread gets interrupted by them.
@@ -182,14 +185,22 @@ int main(int argc, char *argv[]) {
     return 0; // Never reached logically
 }
 
+static char *unquote(char *s) {
+    size_t n = strlen(s);
+    if (n >= 2 && s[0] == '"' && s[n - 1] == '"') {
+        s[n - 1] = '\0';
+        return s + 1;
+    }
+    return s;
+}
 
+// look up request matrix for free cell
 int request_id(void) {
     for (int attempt = 0; attempt < MAX_PENDING; attempt++) {
         int full_id = atomic_fetch_add(&lib.next_id, 1);
         int idx = full_id % MAX_PENDING;
         int expected = 0;
-        if (atomic_compare_exchange_strong(&lib.pending[idx].in_use,
-                                        &expected, 1)) {
+        if (atomic_compare_exchange_strong(&lib.pending[idx].in_use, &expected, 1)) {
             pthread_mutex_lock(&lib.pending[idx].lock);
             lib.pending[idx].received_responses = 0;
             lib.pending[idx].request_id = full_id;
@@ -272,14 +283,14 @@ Book *read_catalog(char *catalog_file, int lines) {
             continue;
 
         char *token = strtok(row, ",");
-        if (token != NULL)
-        {
+        if (token != NULL) {
+            token = unquote(token);
             strncpy(catalog[current_book].name, token, sizeof(catalog[current_book].name) - 1);
             catalog[current_book].name[sizeof(catalog[current_book].name) - 1] = '\0';
         }
         token = strtok(NULL, ",");
-        if (token != NULL)
-        {
+        if (token != NULL) {
+            token = unquote(token);
             strncpy(catalog[current_book].author, token, sizeof(catalog[current_book].author) - 1);
             catalog[current_book].author[sizeof(catalog[current_book].author) - 1] = '\0';
         }
@@ -298,6 +309,7 @@ Book *read_catalog(char *catalog_file, int lines) {
 }
 
 void register_user(char *username, int fd) {
+    sleep(1 + rand() % 5);
     pthread_mutex_lock(&lib.users_lock);
 
     for (int i = 0; i < lib.num_users; i++)
@@ -381,7 +393,7 @@ void borrow_book(char *username, char *book_title, int fd) {
             return;
         }
         char message[2048];
-        sprintf(message, "LIB|REQUEST|%d|%d|BORROW|%s", lib.id,id, book_title);
+        sprintf(message, "LIB|REQUEST|%d|%d|BORROW|%s", lib.id, id, book_title);
         PendingRequest *ptr = &lib.pending[id%MAX_PENDING];
         pthread_mutex_lock(&ptr->lock);
         ptr->num_requests = lib.num_total_libraries-1; //sending a message to all other libraries
@@ -399,36 +411,38 @@ void borrow_book(char *username, char *book_title, int fd) {
             send_message(message, lib_fd);
             close(lib_fd);
         }
+
         //TTL for the messages
         struct timespec deadline;
         clock_gettime(CLOCK_REALTIME, &deadline);
         deadline.tv_sec += BROADCAST_TIMEOUT_SEC;
 
         while (ptr->outcome == PENDING && ptr->received_responses < ptr->num_requests) {
-            int rc = pthread_cond_timedwait(&ptr->cond, &ptr->lock, &deadline);
+            int rc = pthread_cond_timedwait(&ptr->cond, &ptr->lock, &deadline);   // wait with timeout
             if (rc == ETIMEDOUT) break;
         }
         enum Outcome outcome = ptr->outcome;
-        int responder    = ptr->response_id;
+        int responder = ptr->response_id;
         atomic_store(&ptr->in_use, 0);
         pthread_mutex_unlock(&ptr->lock);
         if(outcome==LENT){
             strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
-            user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
+            user_ptr->borrowed[sizeof(user_ptr->borrowed) -1] = '\0';
             user_ptr->borrowed_from_lib = responder;
-            send_message("0|Book has successfully been lent",fd);
-
+            send_message("0|Book has successfully been lent", fd);
         }
         if(outcome==ALREADY_LENT){
             send_message("4|Book was already lent to another user", fd);
         }
         if(outcome==PENDING){
-            send_message("1|No such book.",fd);
+            send_message("1|No such book.", fd);
         }
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
     // CASE B — Book is in *this* library's catalog. Local borrow.
+
+    sleep(1 + rand()%5);
     pthread_mutex_lock(&(book_ptr->lock));
 
     if (book_ptr->availability == AVAILABLE)
@@ -450,6 +464,8 @@ void borrow_book(char *username, char *book_title, int fd) {
 }
 
 void return_book(char *username, char *book_title, int fd) {
+
+    sleep(1 + rand()%5);
     pthread_mutex_lock(&lib.users_lock);
     User *user_ptr = find_user(username);
     pthread_mutex_unlock(&lib.users_lock);
@@ -517,7 +533,19 @@ void return_book(char *username, char *book_title, int fd) {
     }
 }
 
+static int matches(const Book *b, int by_author, int by_title, int by_year, const char *value) {
+    if (by_author) return strstr(b->author, value) != NULL;
+    if (by_title)  return strstr(b->name,   value) != NULL;
+    if (by_year) {
+        char ys[16];
+        snprintf(ys, sizeof(ys), "%d", b->year);
+        return strstr(ys, value) != NULL;
+    }
+    return 0;
+}
+
 void search_book(char *username, char *field, char *value, int fd) {
+    sleep(1 + rand()%5);
     (void)username;
 
     int by_author = (strcmp(field, "author") == 0);
@@ -531,36 +559,26 @@ void search_book(char *username, char *field, char *value, int fd) {
         return;
     }
 
-    char body[4096];
-    body[0] = '\0';
     int found = 0;
+    for (int i = 0; i < lib.num_books && !found; i++) found = matches(&lib.catalog[i], by_author, by_title, by_year, value);
 
-    for (int i = 0; i < lib.num_books; i++) {
-        const char *haystack;
-        char year_str[16];
-        if      (by_author) haystack = lib.catalog[i].author;
-        else if (by_title)  haystack = lib.catalog[i].name;
-        else {
-            snprintf(year_str, sizeof(year_str), "%d", lib.catalog[i].year);
-            haystack = year_str;
-        }
-
-        if (strstr(haystack, value)) {
-            char line[512];
-            snprintf(line, sizeof(line), "%s by %s (%d)\n",
-                     lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
-            strncat(body, line, sizeof(body) - strlen(body) - 1);
-            found = 1;
-        }
+    if (!found) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "0|No books found matching %s = '%s'\n", field, value);
+        send_message(msg, fd);
+        return;
     }
 
-    char res[4160];
-    if (!found)
-        snprintf(res, sizeof(res), "0|No books found matching %s = '%s'\n", field, value);
-    else
-        snprintf(res, sizeof(res), "0|Search results:\n%s", body);
-    send_message(res, fd);
+    send_message("0|Search results:\n", fd);          // status line first
+    for (int i = 0; i < lib.num_books; i++) {
+        if (matches(&lib.catalog[i], by_author, by_title, by_year, value)) {
+            char line[512];
+            snprintf(line, sizeof(line), "%s by %s (%d)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+            send_message(line, fd);                    // one write per match
+        }
+    }
 }
+
 // working threads
 void *user_request_thread(void *arg) {
     UserRequestContext *ctx = (UserRequestContext *)arg;
@@ -574,9 +592,7 @@ void *user_request_thread(void *arg) {
     char *arg1 = ctx->arg1;
     if (strcmp(op, "REGISTER") == 0)
     {
-
         register_user(username, fd);
-
     }
     else if (strcmp(op, "BORROW") == 0)
     {
@@ -594,11 +610,10 @@ void *user_request_thread(void *arg) {
     return NULL;
 }
 
-//TODO
 void *library_request_thread(void *arg) {
     LibraryRequestContext *ctx = (LibraryRequestContext *)arg;
 
-    // Spec: random 1-5 second delay before responding
+    // Specification: random 1-5 second delay before responding
     sleep(1 + rand() % 5);
 
     const char *outcome_str;
@@ -619,9 +634,7 @@ void *library_request_thread(void *arg) {
     }
 
     char response[512];
-    snprintf(response, sizeof(response),
-             "LIB|RESPONSE|%d|%d|%s\n",
-             lib.id, ctx->request_id, outcome_str);
+    snprintf(response, sizeof(response), "LIB|RESPONSE|%d|%d|%s\n", lib.id, ctx->request_id, outcome_str);
 
     char path[256];
     snprintf(path, sizeof(path), "/tmp/lib_cmd_%d", ctx->src_lib);
@@ -635,6 +648,7 @@ void *library_request_thread(void *arg) {
     free(ctx);
     return NULL;
 }
+
 // message handling
 void handle_user_message(char *message) {
     UserRequestContext *ctx = calloc(1, sizeof(*ctx)); // calloc -> all fields zeroed, so no need to do = '\0'
@@ -810,7 +824,6 @@ void handle_library_request(char *message) {
     }
 }
 
-
 void handle_pending(int id,char *response,int lib_id){ // Gets called by the listenerthread to handle responses to pending requests.
     int pending_slot = id % MAX_PENDING;
     PendingRequest *ptr = &lib.pending[pending_slot];
@@ -835,6 +848,7 @@ void handle_pending(int id,char *response,int lib_id){ // Gets called by the lis
     }
     pthread_mutex_unlock(&ptr->lock);
 }
+
 //listening
 void process_message(char *buffer) {
     char source[32];
