@@ -31,7 +31,7 @@ void search_book();
 void* user_request_thread(void*);
 int lib_request(int, enum Outcome*, int*, const char*, ...)
     __attribute__((format(printf, 4, 5)));
-void* library_request_thread(void*);
+void* borrow_request_thread(void*);
 void handle_user_message(char*);
 void handle_library_request(char*);
 void process_message(char*);
@@ -683,7 +683,7 @@ void *user_request_thread(void *arg) {
     return NULL;
 }
 
-void *library_request_thread(void *arg) {
+void *borrow_request_thread(void *arg) {
     LibraryRequestContext *ctx = (LibraryRequestContext *)arg;
 
     // Specification: random 1-5 second delay before responding
@@ -722,6 +722,22 @@ void *library_request_thread(void *arg) {
     return NULL;
 }
 
+
+void *verify_request_thread(void *arg){
+    VerifyContext *vericontext = (VerifyContext *)arg;
+    pthread_mutex_lock(&lib.users_lock);
+    User *user_ptr = find_user(vericontext.username);
+    pthread_mutex_unlock(&lib.users_lock);
+    char message[1024];
+    if(user_ptr==NULL){
+        sprintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n", lib.id, vericontext.request_id, "not_held");
+    }
+    else{
+        pthread_mutex_lock(&user_ptr.lock);
+        if(strcmp(user_ptr.borrowed,vericontext.))
+    }
+    send_to_library(vericontext.src_lib, message);
+}
 // message handling
 void handle_user_message(char *message) {
     UserRequestContext *ctx = calloc(1, sizeof(*ctx)); // calloc -> all fields zeroed, so no need to do = '\0'
@@ -857,20 +873,31 @@ void handle_library_request(char *message) {
         char *op      = strtok_r(NULL, "|", &save);
         char *title   = strtok_r(NULL, "|", &save);
         if (!src_s || !id_s || !op || !title) return;
-        if (strcmp(op, "BORROW") != 0) return;
-
-        LibraryRequestContext *ctx = calloc(1, sizeof(*ctx));
-        if (!ctx) return;
-        ctx->src_lib    = atoi(src_s);
-        ctx->request_id = atoi(id_s);
-        strncpy(ctx->book_title, title, sizeof(ctx->book_title) - 1);
-
-        pthread_t t;
-        if (pthread_create(&t, NULL, library_request_thread, ctx) != 0) {
-            free(ctx);
-            return;
+        if (strcmp(op, "BORROW") == 0) {
+            // LIB|REQUEST|<src>|<id>|BORROW|<title>
+            LibraryRequestContext *ctx = calloc(1, sizeof(*ctx));
+            if (!ctx) return;
+            ctx->src_lib    = atoi(src_s);
+            ctx->request_id = atoi(id_s);
+            strncpy(ctx->book_title, title, sizeof(ctx->book_title) - 1);
+            pthread_t t;
+            if (pthread_create(&t, NULL, borrow_request_thread, ctx) != 0) { free(ctx); return; }
+            pthread_detach(t);
         }
-        pthread_detach(t);
+        else if (strcmp(op, "VERIFY") == 0) {
+            // LIB|REQUEST|<src>|<id>|VERIFY|<title>|<user>   (VERIFY carries an extra field)
+            char *user = strtok_r(NULL, "|", &save);
+            if (!user) return;
+            VerifyContext *ctx = calloc(1, sizeof(*ctx));
+            if (!ctx) return;
+            ctx->src_lib    = atoi(src_s);
+            ctx->request_id = atoi(id_s);
+            strncpy(ctx->book_title, title, sizeof(ctx->book_title) - 1);
+            strncpy(ctx->username,   user,  sizeof(ctx->username)  - 1);
+            pthread_t t;
+            if (pthread_create(&t, NULL, verify_request_thread, ctx) != 0) { free(ctx); return; }
+            pthread_detach(t);
+        }
     }
     else if (strcmp(kind, "RESPONSE") == 0) {
         // LIB|RESPONSE|<responder_lib>|<id>|<outcome>
@@ -896,7 +923,9 @@ void handle_library_request(char *message) {
         pthread_mutex_unlock(&book_ptr->lock);
     }
     else if (strcmp(kind, "VERIFY") == 0){
-        
+        //LIB|VERIFY|src_lib|id|BOOK_NAME|USER_NAME
+
+
     }
 }
 

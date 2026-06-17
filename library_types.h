@@ -93,6 +93,13 @@ typedef struct
     char book_title[256];
 } LibraryRequestContext;
 
+typedef struct
+{
+    int src_lib;
+    int request_id;
+    char book_title[256];
+    char username[100];
+} VerifyContext;
 extern Library lib;
 
 #endif
