@@ -83,7 +83,7 @@ function process_request() {
 
 function process_response() {
     local response
-    response=$(timeout 10 cat "$RESPONSE_PIPE")
+    response=$(timeout 20 cat "$RESPONSE_PIPE")
 
     if [ -z "$response" ]; then
         echo "ERROR: No response received from the library: $library_id"
