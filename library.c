@@ -388,7 +388,6 @@ Book *read_catalog(char *catalog_file, int lines) {
 }
 // adds user to lib.users
 void register_user(char *username, int fd) {
-    sleep(1 + rand() % 5);
     pthread_mutex_lock(&lib.users_lock);
 
     for (int i = 0; i < lib.num_users; i++)
@@ -524,7 +523,6 @@ void borrow_book(char *username, char *book_title, int fd) {
         return;
     }
     // CASE B — Book is in *this* library's catalog. Local borrow.
-    sleep(1 + rand()%5);
     pthread_mutex_lock(&(book_ptr->lock));
 
     // resolve_loan verifies/reclaims a stale remote loan if needed; 1 -> we can lend it locally.
@@ -547,7 +545,6 @@ void borrow_book(char *username, char *book_title, int fd) {
 
 void return_book(char *username, char *book_title, int fd) {
 
-    sleep(1 + rand()%5);
     pthread_mutex_lock(&lib.users_lock);
     User *user_ptr = find_user(username);
     pthread_mutex_unlock(&lib.users_lock);
@@ -578,7 +575,7 @@ void return_book(char *username, char *book_title, int fd) {
         char buffer[1024];
         snprintf(buffer, sizeof(buffer), "LIB|RETURN|%d|%s\n", lib.id, book_title);
         if(send_to_library(user_ptr->borrowed_from_lib, buffer) < 0){
-            send_message("6|System busy, try later");
+            send_message("6|System busy, try later", fd);
             pthread_mutex_unlock(&user_ptr->lock);
             return;
         }
@@ -622,7 +619,6 @@ int matches(const Book *b, int by_author, int by_title, int by_year, const char 
 }
 
 void search_book(char *username, char *field, char *value, int fd) {
-    sleep(1 + rand()%5);
     (void)username;
 
     int by_author = (strcmp(field, "author") == 0);
@@ -665,6 +661,9 @@ void *user_request_thread(void *arg) {
         free(ctx);
         return NULL;
     }
+    // Spec 2.6: one random 1-5s processing delay per user-facing request, applied here so
+    // inter-library messages (BORROW/VERIFY) stay fast and nested waits don't compound.
+    sleep(1 + rand() % 5);
     char *username = ctx->username;
     char *arg1 = ctx->arg1;
     if (strcmp(op, "REGISTER") == 0)
@@ -689,9 +688,6 @@ void *user_request_thread(void *arg) {
 
 void *borrow_request_thread(void *arg) {
     LibraryRequestContext *ctx = (LibraryRequestContext *)arg;
-
-    // Specification: random 1-5 second delay before responding
-    sleep(1 + rand() % 5);
 
     const char *outcome_str;
     Book *book_ptr = find_book(ctx->book_title);
