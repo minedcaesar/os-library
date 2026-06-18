@@ -23,8 +23,7 @@ enum Outcome
     LENT,
     ALREADY_LENT,
     HELD,        // verify: borrower confirms it really holds the book
-    NOT_HELD,    // verify: borrower doesn't have it -> safe to 
-    DONE
+    NOT_HELD,    // verify: borrower doesn't have it -> safe to reclaim
 };
 
 // user entity
@@ -87,20 +86,16 @@ typedef struct
     char response_pipe[256];
 } UserRequestContext;
 
-typedef struct
-{
-    int src_lib;
-    int request_id;
-    char book_title[256];
-} LibraryRequestContext;
-
+// Shared by BORROW and VERIFY inter-library requests: both carry the borrowing user, so the
+// owner can record who holds a remotely-lent book and later verify it by name.
 typedef struct
 {
     int src_lib;
     int request_id;
     char book_title[256];
     char username[100];
-} VerifyContext;
+} LibraryRequestContext;
+
 typedef struct
 {
     int src_lib;

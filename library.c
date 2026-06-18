@@ -502,7 +502,7 @@ void borrow_book(char *username, char *book_title, int fd) {
     {
         enum Outcome outcome;
         int lib_responder =-1;
-        if (lib_request(BROADCAST_ALL, &outcome, &lib_responder, "BORROW|%s", book_title) < 0) {
+        if (lib_request(BROADCAST_ALL, &outcome, &lib_responder, "BORROW|%s|%s", book_title, username) < 0) {
             send_message("6|System busy, try again later", fd);
             pthread_mutex_unlock(&user_ptr->lock);
             return;
@@ -619,7 +619,7 @@ int matches(const Book *b, int by_author, int by_title, int by_year, const char 
 }
 
 void search_book(char* username,char *field, char *value,int fd, char* response_pipe) {
-
+    
     pthread_mutex_lock(&lib.users_lock);
     if(find_user(username)==NULL){
         send_message("1|No such user.",fd);
@@ -740,7 +740,9 @@ void *borrow_request_thread(void *arg) {
         // resolve_loan reclaims a stale remote loan before we decide; 1 -> available to grant.
         if (resolve_loan(book_ptr)) {
             book_ptr->availability = LENT_OUT;
-            book_ptr->lent_to[0]   = '\0';      // remote loan, no local user
+            // record the remote borrower's name so we can VERIFY this loan later
+            strncpy(book_ptr->lent_to, ctx->username, sizeof(book_ptr->lent_to) - 1);
+            book_ptr->lent_to[sizeof(book_ptr->lent_to) - 1] = '\0';
             book_ptr->lent_to_lib  = ctx->src_lib;
             book_ptr->really_lent  = 0;
             outcome_str = "GRANTED";
@@ -762,7 +764,7 @@ void *borrow_request_thread(void *arg) {
 
 
 void *verify_request_thread(void *arg){
-    VerifyContext *ctx = (VerifyContext *)arg;
+    LibraryRequestContext *ctx = (LibraryRequestContext *)arg;
 
     const char *verdict = "NOT_HELD";
     pthread_mutex_lock(&lib.users_lock);
@@ -920,21 +922,24 @@ void handle_library_request(char *message) {
         char *title   = strtok_r(NULL, "|", &save);
         if (!src_s || !id_s || !op || !title) return;
         if (strcmp(op, "BORROW") == 0) {
-            // LIB|REQUEST|<src>|<id>|BORROW|<title>
+            // LIB|REQUEST|<src>|<id>|BORROW|<title>|<user>
+            char *user = strtok_r(NULL, "|", &save);
+            if (!user) return;
             LibraryRequestContext *ctx = calloc(1, sizeof(*ctx));
             if (!ctx) return;
             ctx->src_lib    = atoi(src_s);
             ctx->request_id = atoi(id_s);
             strncpy(ctx->book_title, title, sizeof(ctx->book_title) - 1);
+            strncpy(ctx->username,   user,  sizeof(ctx->username)  - 1);
             pthread_t t;
             if (pthread_create(&t, NULL, borrow_request_thread, ctx) != 0) { free(ctx); return; }
             pthread_detach(t);
         }
         else if (strcmp(op, "VERIFY") == 0) {
-            // LIB|REQUEST|<src>|<id>|VERIFY|<title>|<user>   (VERIFY carries an extra field)
+            // LIB|REQUEST|<src>|<id>|VERIFY|<title>|<user>
             char *user = strtok_r(NULL, "|", &save);
             if (!user) return;
-            VerifyContext *ctx = calloc(1, sizeof(*ctx));
+            LibraryRequestContext *ctx = calloc(1, sizeof(*ctx));
             if (!ctx) return;
             ctx->src_lib    = atoi(src_s);
             ctx->request_id = atoi(id_s);
