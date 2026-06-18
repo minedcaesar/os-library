@@ -708,7 +708,7 @@ void *user_request_thread(void *arg) {
     }
     // Spec 2.6: one random 1-5s processing delay per user-facing request, applied here so
     // inter-library messages (BORROW/VERIFY) stay fast and nested waits don't compound.
-    //sleep(1 + rand() % 5); COMMENTED OUT FOR DEBUG
+    sleep(1 + rand() % 5);
     char *username = ctx->username;
     char *arg1 = ctx->arg1;
     if (strcmp(op, "REGISTER") == 0)
