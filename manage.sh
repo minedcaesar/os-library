@@ -12,9 +12,10 @@ case $OPERATION in
         pkill -SIGUSR1 library
         sleep 0.5
         
-        shopt -s nullglob
+        shopt -s nullglob # so that when a files=(library_status_*.txt) finds no matches, it collapses to an empty list instead
         files=(library_status_*.txt)
         if (( ${#files[@]} > 0 )); then
+            echo "${#files[@]} library(s) running."    # count how many responding libraries
             cat "${files[@]}"
         else
             echo "No operational libraries detected."
