@@ -31,8 +31,7 @@ int resolve_loan(Book *);
 void return_book(char*, char*, int);
 void search_book(char*,char *, char *, int, char*);
 void* user_request_thread(void*);
-int lib_request(int, enum Outcome*, int*, const char*, ...)
-    __attribute__((format(printf, 4, 5)));
+int lib_request(int, enum Outcome*, int*, const char*, ...) __attribute__((format(printf, 4, 5)));
 void* borrow_request_thread(void*);
 void handle_user_message(char*);
 void handle_library_request(char*);
@@ -40,8 +39,9 @@ void process_message(char*);
 void* listener_thread(void*);
 void handle_mgmt_message(char*);
 void handle_pending(int, char *, int);
-void *mgmt_request_thread(void *);
+void* mgmt_request_thread(void *);
 int matches(const Book *, int, int, int, const char *);
+char* next_csv_field(char**, char*, size_t);
 
 
 int main(int argc, char *argv[]) {
@@ -213,14 +213,13 @@ int send_to_library(int lib_id, const char *msg) {
 //   outcome   : out — LENT / ALREADY_LENT, or PENDING if it timed out / nobody answered.
 //   responder : out — id that produced the verdict (meaningful for LENT / ALREADY_LENT).
 // Returns 0 on success, or -1 if the pending-request pool is exhausted.
-int lib_request(int target, enum Outcome *outcome, int *responder,
-                const char *fmt, ...) {
+int lib_request(int target, enum Outcome *outcome, int *responder, const char *fmt, ...) {  // variable number of args
     int id = request_id();
     if (id < 0)
         return -1;
 
     char payload[2000];
-    va_list ap;
+    va_list ap;    // variable lenght list of args data structure
     va_start(ap, fmt);
     vsnprintf(payload, sizeof(payload), fmt, ap);
     va_end(ap);
@@ -334,7 +333,7 @@ int count_lines(char file_name[]) {
     return count;
 }
 
-static char *next_csv_field(char **cursor, char *out, size_t outsz) {
+char *next_csv_field(char **cursor, char *out, size_t outsz) {
     char *p = *cursor;
     size_t o = 0;
     if (*p == '\0') { out[0] = '\0'; return NULL; }
@@ -393,8 +392,7 @@ Book *read_catalog(char *catalog_file, int lines) {
         char *name   = next_csv_field(&cursor, b->name,   sizeof(b->name));
         char *author = next_csv_field(&cursor, b->author, sizeof(b->author));
         char *year   = next_csv_field(&cursor, yearbuf,   sizeof(yearbuf));
-        if (!name || !author || !year)        // malformed row -> skip
-            continue;
+        if (!name || !author || !year) continue;       // malformed row -> skip
 
         b->year         = atoi(year);
         b->availability = AVAILABLE;
@@ -487,6 +485,7 @@ int resolve_loan(Book *book) {
             book->really_lent  = 1;           // confirmed -> never re-ask
         }
     }
+    
     return book->availability == AVAILABLE;
 }
 
@@ -528,7 +527,7 @@ void borrow_book(char *username, char *book_title, int fd) {
             pthread_mutex_unlock(&user_ptr->lock);
             return;
         }
-              if (outcome == LENT) {
+        if (outcome == LENT) {
             strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
             user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
             user_ptr->borrowed_from_lib = lib_responder;
@@ -541,6 +540,7 @@ void borrow_book(char *username, char *book_title, int fd) {
             send_message("1|No such book.", fd);
         }
         pthread_mutex_unlock(&user_ptr->lock);
+
         return;
     }
     // CASE B — Book is in *this* library's catalog. Local borrow.
@@ -556,11 +556,13 @@ void borrow_book(char *username, char *book_title, int fd) {
         strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed)-1);
         user_ptr->borrowed[sizeof(user_ptr->borrowed)-1]='\0';
         send_message("0|Success", fd);
-    } else {
+    } 
+    else {
         send_message("4|Book not available", fd);
     }
     pthread_mutex_unlock(&book_ptr->lock);
     pthread_mutex_unlock(&user_ptr->lock);
+
     return;
 }
 
@@ -615,8 +617,7 @@ void return_book(char *username, char *book_title, int fd) {
         return;
     }
     else
-    {
-
+    {    
         pthread_mutex_lock(&book_ptr->lock);
         book_ptr->availability = AVAILABLE;
         strncpy(book_ptr->lent_to, "", sizeof(book_ptr->lent_to));
@@ -700,8 +701,7 @@ void *search_request_thread(void *arg) {
         for (int i = 0; i < lib.num_books; i++) {
             if (matches(&lib.catalog[i], by_author, by_title, by_year, ctx->value)) {
                 char line[512];
-                snprintf(line, sizeof(line), "%s by %s (%d)\n",
-                         lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+                snprintf(line, sizeof(line), "%s by %s (%d)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
                 send_message(line, fd);
             }
         }
@@ -716,7 +716,7 @@ void *search_request_thread(void *arg) {
     free(ctx);
     return NULL;
 }
-// working threads
+
 void *user_request_thread(void *arg) {
     UserRequestContext *ctx = (UserRequestContext *)arg;
     char *op = ctx->operation;
@@ -785,7 +785,6 @@ void *borrow_request_thread(void *arg) {
     return NULL;
 }
 
-
 void *verify_request_thread(void *arg){
     LibraryRequestContext *ctx = (LibraryRequestContext *)arg;
 
@@ -809,6 +808,7 @@ void *verify_request_thread(void *arg){
     free(ctx);
     return NULL;
 }
+
 // message handling
 void handle_user_message(char *message) {
     UserRequestContext *ctx = calloc(1, sizeof(*ctx)); // calloc -> all fields zeroed, so no need to do = '\0'
@@ -1105,7 +1105,6 @@ void * mgmt_request_thread(void * arg){
     return NULL;
 }
 
-//READ THIS
 void handle_mgmt_message(char * message) {
     char msg_copy[4096];
     strncpy(msg_copy, message, sizeof(msg_copy) - 1);
