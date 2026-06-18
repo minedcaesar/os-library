@@ -12,42 +12,35 @@ interact with the system through Bash scripts.
 ## Requirements
 
 - Linux (developed/tested on Ubuntu 24.04)
-- `gcc` with POSIX threads (`-pthread` is pulled in by the standard library on Linux)
+- `gcc` with POSIX threads
 - `bash`, `make`
 
-> The system uses POSIX FIFOs under `/tmp` and POSIX signals, so it must run on a
-> Unix-like OS. It does **not** run natively on Windows.
+> The system uses POSIX FIFOs under `/tmp`, POSIX threads, and POSIX signals, so it must run on
+> a Unix-like OS. It does **not** run natively on Windows.
 
 ---
 
-## Build
+## Build & run
 
 ```sh
-make build      # compiles ./library and marks the scripts executable
-make clean      # removes the binary and cleans up IPC resources (/tmp/lib_cmd*, /tmp/catalog*.csv)
+make build                              # compiles ./library, marks the scripts executable
 make run ARGS="3 csv_books/books.csv"   # bootstraps a scenario (3 libraries from books.csv)
+make clean                              # removes the binary and stale IPC (/tmp/lib_cmd*, /tmp/catalog*.csv)
 ```
 
-`make run` simply forwards `ARGS` to `bootstrap.sh`.
+`make run` forwards `ARGS` to `bootstrap.sh`.
 
----
-
-## Quick start
+### Quick start
 
 ```sh
-# 1. Build
 make build
-
-# 2. Launch 3 libraries, splitting books.csv across them
 ./bootstrap.sh 3 csv_books/books.csv
 
-# 3. Use the system
-./user.sh Alice 1 register
-./user.sh Alice 1 borrow "The Great Gatsby"
-./user.sh Alice 1 return "The Great Gatsby"
-./user.sh Charlie 1 search --by author "F. Scott Fitzgerald"
+./user.sh Alice   1 register
+./user.sh Alice   1 borrow "The Great Gatsby"
+./user.sh Alice   1 return "The Great Gatsby"
+./user.sh Charlie 1 search --by author "Isaac Asimov"
 
-# 4. Inspect / shut down
 ./manage.sh list_books
 ./manage.sh list_users
 ./manage.sh status
@@ -58,15 +51,15 @@ make build
 
 ## Components
 
-| File                | Role                                                                       |
-|---------------------|----------------------------------------------------------------------------|
-| `library.c`         | The library process: catalog, user/inter-library request handling, IPC.    |
-| `library_types.h`   | Shared data structures (`Book`, `User`, `PendingRequest`, `Library`).      |
-| `bootstrap.sh`      | Splits the source CSV into N catalogs and launches N libraries.            |
-| `user.sh`           | User-facing client: register / search / borrow / return.                  |
-| `manage.sh`         | Admin script: status / list_books / list_users / stop.                    |
-| `Makefile`          | `build` / `clean` / `run` targets.                                         |
-| `csv_books/books.csv` | Source catalog (`Title,Author,Year`, with a header row).                |
+| File                  | Role                                                                       |
+|-----------------------|----------------------------------------------------------------------------|
+| `library.c`           | The library process: catalog, user/inter-library request handling, IPC.    |
+| `library_types.h`     | Shared data structures (`Book`, `User`, `PendingRequest`, contexts, …).     |
+| `bootstrap.sh`        | Splits the source CSV into N catalogs and launches N libraries.             |
+| `user.sh`             | User-facing client: register / search / borrow / return.                   |
+| `manage.sh`           | Admin script: status / list_books / list_users / stop.                     |
+| `Makefile`            | `build` / `clean` / `run` targets.                                         |
+| `csv_books/books.csv` | Source catalog (`Title,Author,Year`, with a header row).                   |
 
 ---
 
@@ -93,12 +86,12 @@ Normally launched by `bootstrap.sh`, not by hand. Library IDs are assumed to be 
 ./user.sh Alice   1 register
 ./user.sh Alice   1 borrow "The Great Gatsby"
 ./user.sh Bob     2 return "The Great Gatsby"
-./user.sh Charlie 1 search --by author "F. Scott Fitzgerald"
+./user.sh Charlie 1 search --by author "Isaac Asimov"
 ./user.sh Charlie 1 search --by title  "1984"
 ./user.sh Charlie 1 search --by year   1984
 ```
-Usernames are normalized to uppercase. A user must `register` with a library before
-borrowing, and may hold at most one book at a time.
+Usernames are normalized to uppercase. A user must `register` with a library before borrowing,
+may register with as many libraries as they want, and may hold at most one book at a time.
 
 ### Management script
 ```sh
@@ -116,73 +109,104 @@ borrowing, and may hold at most one book at a time.
 Each library is a single process with:
 
 - A **listener thread** reading the library's command FIFO (`/tmp/lib_cmd_<id>`), opened
-  `O_RDWR` so it never sees EOF when clients disconnect.
-- A **detached worker thread per request** (user requests, inbound inter-library borrow
-  requests, and management requests are each dispatched to their own thread), so requests are
-  handled **concurrently**.
-- The **main thread** which, after setup, blocks in `sigwait()` and handles `SIGUSR1`
-  (status dump) and `SIGTERM` (clean shutdown) synchronously, making it safe to do file I/O
-  and free resources without racing the worker threads.
+  `O_RDWR` so it never sees EOF when clients disconnect. It splits the byte stream into
+  newline-delimited messages and dispatches each.
+- A **detached worker thread per request** — user operations, inbound inter-library requests
+  (`BORROW` / `VERIFY` / `SEARCH`), and management queries are each handled on their own thread,
+  so requests run **concurrently**.
+- The **main thread**, which after setup blocks in `sigwait()` and handles `SIGUSR1` (status
+  dump) and `SIGTERM` (clean shutdown) synchronously — making it safe to do file I/O and free
+  resources without racing the workers. `SIGUSR1`/`SIGTERM` are blocked process-wide before any
+  thread is spawned, and `SIGPIPE` is ignored so a client closing its pipe early can't crash us.
 
 ### IPC
 - **FIFOs** are the only IPC channel. Every library has one well-known command FIFO,
-  `/tmp/lib_cmd_<id>`, that carries user requests, inter-library messages, and management
-  requests.
-- Clients pass a **response FIFO** path in their request; the library opens it and writes the
-  reply back.
-- Inter-library writes use `O_WRONLY | O_NONBLOCK` so a library never blocks (and never
-  deadlocks against its own listener) when contacting a peer.
+  `/tmp/lib_cmd_<id>`, carrying user, inter-library, and management messages — all short and
+  newline-framed.
+- Clients (and, for search, peers) write bulk replies to a **separate response FIFO**, never the
+  command FIFO, so large payloads can't corrupt the framed command channel.
+- Inter-library writes use `O_WRONLY | O_NONBLOCK` so a library never blocks (and never deadlocks
+  against its own listener) when contacting a busy or dead peer.
+
+### Concurrency & synchronization
+- One mutex **per book** and one **per user** guard the mutable state; two users borrowing
+  different books never contend. Locks are always taken **user-before-book** to avoid deadlock.
+- A global `users_lock` guards the user registry (including growth via `realloc`).
+- `PendingRequest` slots (a fixed pool) coordinate inter-library request/response: an atomic
+  `in_use` flag plus a `request_id` check cause late or stale responses to be ignored, and the
+  slot's condition variable + `received_responses` counter implement a quorum/TTL wait.
+- As required by the spec, each **user** request incurs one random **1–5 s** processing delay
+  (applied once on the user-facing path). Inter-library messages are left undelayed so nested
+  cross-library waits don't compound.
 
 ### Borrowing across libraries
 1. A user asks library *A* to borrow a book.
-2. If *A* owns the book, it lends it locally under the per-book lock.
-3. If not, *A* broadcasts `LIB|REQUEST` to all peers and waits (with a **TTL**, see
-   `BROADCAST_TIMEOUT_SEC`) on a `PendingRequest` slot.
-4. Peers reply `GRANTED` / `ALREADY_LENT` / `NOT_FOUND`. The first peer that owns and can lend
-   the book wins.
-5. The user always **returns the book to the library they borrowed from**; that library then
-   forwards a `LIB|RETURN` to the owning library.
+2. If *A* owns the book, it lends locally under the per-book lock.
+3. If not, *A* broadcasts `LIB|REQUEST|…|BORROW|<title>|<user>` to all peers and waits (with a
+   **TTL**, `BROADCAST_TIMEOUT_SEC`) on a `PendingRequest` slot.
+4. Peers reply `GRANTED` / `ALREADY_LENT` / `NOT_FOUND`. Because each book exists once, at most
+   one peer can grant it; the owner records `lent_to_lib` (the borrowing library) and the
+   borrowing user's name.
+5. The user always **returns to the library they borrowed from**; that library forwards a
+   `LIB|RETURN` to the owner, which marks the book available again.
 
-### Synchronization
-- One mutex **per book** and one **per user** guard the mutable state, so two users borrowing
-  different books never contend.
-- A global `users_lock` guards the user registry (including growth via `realloc`).
-- `PendingRequest` slots use an atomic `in_use` flag plus a `request_id` check so that late or
-  stale inter-library responses are safely ignored.
+### Optimistic lending & the VERIFY reconciliation
+A book lent to a peer is marked `LENT_OUT` but flagged **unconfirmed** (`really_lent = 0`): the
+owner can't be sure the borrower received the grant (the Two Generals problem). Rather than block
+or run a commit protocol, the doubt is resolved **lazily**:
+
+- When anyone next wants that book (a local user, *or* another library), the owner sends
+  `LIB|REQUEST|…|VERIFY|<title>|<user>` to the borrowing library.
+- The borrower answers `HELD` (its user still holds it → the owner caches `really_lent = 1` and
+  refuses) or `NOT_HELD` (the grant was lost → the owner **reclaims** the book and lends it).
+
+This is paid only when a book is actually contended, and never causes a double-lend.
+
+### Distributed search
+Search results can exceed a single pipe read, so they must not travel over the command FIFO. The
+contacted library writes its own matches to the user's response pipe, then broadcasts
+`LIB|REQUEST|…|SEARCH|<field>|<value>|<resp_pipe>`. Each peer opens that pipe directly, streams
+its matching books, and sends a small `DONE` ack over the command FIFO. The contacted library
+blocks on the pending-slot quorum until every peer has acked (or the TTL fires), then closes the
+pipe — so the user receives one combined result set. Only the tiny query and acks ride the
+command FIFO; the bulk data goes peer-to-user directly.
 
 ---
 
 ## Wire protocol (FIFO messages)
 
-Messages are `|`-delimited records.
+`|`-delimited records, one per line.
 
 ```
 # User -> library
-USER|REGISTER|<user>|<response_fifo>
-USER|BORROW|<user>|<title>|<response_fifo>
-USER|RETURN|<user>|<title>|<response_fifo>
-USER|SEARCH|<user>|<field>|<value>|<response_fifo>      # field = author|title|year
+USER|REGISTER|<user>|<resp_fifo>
+USER|BORROW|<user>|<title>|<resp_fifo>
+USER|RETURN|<user>|<title>|<resp_fifo>
+USER|SEARCH|<user>|<field>|<value>|<resp_fifo>          # field = author | title | year
 
-# Library -> library
-LIB|REQUEST|<src_id>|<req_id>|BORROW|<title>
-LIB|RESPONSE|<responder_id>|<req_id>|<GRANTED|ALREADY_LENT|NOT_FOUND>
-LIB|RETURN|<src_id>|<title>
+# Library -> library   (REQUEST is the envelope; the 5th field is the operation)
+LIB|REQUEST|<src>|<id>|BORROW|<title>|<user>
+LIB|REQUEST|<src>|<id>|VERIFY|<title>|<user>
+LIB|REQUEST|<src>|<id>|SEARCH|<field>|<value>|<resp_fifo>
+LIB|RESPONSE|<responder>|<id>|<GRANTED|ALREADY_LENT|NOT_FOUND|HELD|NOT_HELD|DONE>
+LIB|RETURN|<src>|<title>
 
 # Management -> library
-MGMT|LIST_BOOKS|<response_fifo>
-MGMT|LIST_USERS|<response_fifo>
+MGMT|LIST_BOOKS|<resp_fifo>
+MGMT|LIST_USERS|<resp_fifo>
 ```
 
-Responses to user requests are formatted as `<code>|<message>` (see below).
+Replies to user requests are `<code>|<message>` (the status line), optionally followed by extra
+lines (e.g. search results).
 
 ---
 
 ## Error / status codes
 
-The library answers every user request with a leading numeric code; `user.sh` exits `0` on
-code `0` and `1` otherwise.
+The library answers every user request with a leading numeric code; `user.sh` exits `0` on code
+`0` and `1` otherwise.
 
-| Code | Meaning                                                             |
+| Code | Meaning                                                              |
 |------|---------------------------------------------------------------------|
 | 0    | Success (registered / lent / returned / search results)             |
 | 1    | No such user, or book found in no catalog at all                    |
@@ -190,7 +214,7 @@ code `0` and `1` otherwise.
 | 3    | No such book (on return)                                            |
 | 4    | Book is already lent out                                            |
 | 5    | User has no book to return                                          |
-| 6    | System busy / allocation failure, retry                             |
+| 6    | System busy / allocation failure — retry                            |
 | 7    | User already holds a book (must return before borrowing another)    |
 | 8    | User does not hold that particular book                             |
 
@@ -198,6 +222,8 @@ code `0` and `1` otherwise.
 
 ## Cleanup
 
-`make clean` and `./manage.sh stop` both remove the FIFOs (`/tmp/lib_cmd*`) and split catalogs
-(`/tmp/catalog*.csv`). On `SIGTERM` each library also unlinks its own command FIFO and frees
-its catalog, user registry, and mutexes before exiting.
+`make clean` removes the binary and stale IPC (`/tmp/lib_cmd*`, `/tmp/catalog*.csv`).
+`./manage.sh stop` sends `SIGTERM` to every library (each frees its own catalog, user registry,
+and mutexes, and unlinks its command FIFO) and then clears any leftover IPC. The two are
+one-directional — `manage.sh stop` may call `make clean`, but `clean` never calls back — so they
+cannot recurse.
