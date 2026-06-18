@@ -10,7 +10,8 @@ $(TARGET): library.c
 	$(CC) $(CFLAGS) -o $(TARGET) library.c
 
 clean:
-	rm -f ./$(TARGET) /tmp/catalog*.csv /tmp/lib_cmd*
+	@./manage.sh stop
+# the @ is used to not print the command ./manage.sh stop
 
 run: build
 	./bootstrap.sh $(ARGS)
