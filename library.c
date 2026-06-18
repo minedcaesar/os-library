@@ -42,7 +42,7 @@ void handle_mgmt_message(char*);
 void handle_pending(int, char *, int);
 void *mgmt_request_thread(void *);
 int matches(const Book *, int, int, int, const char *);
-char *unquote(char*);
+
 
 int main(int argc, char *argv[]) {
     if (argc != 4)
@@ -260,14 +260,7 @@ int lib_request(int target, enum Outcome *outcome, int *responder,
     pthread_mutex_unlock(&ptr->lock);
     return 0;
 }
-char *unquote(char *s) {
-    size_t n = strlen(s);
-    if (n >= 2 && s[0] == '"' && s[n - 1] == '"') {
-        s[n - 1] = '\0';
-        return s + 1;
-    }
-    return s;
-}
+
 
 // look up request matrix for free cell
 int request_id(void) {
