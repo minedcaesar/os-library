@@ -13,6 +13,7 @@
 #include <sys/select.h>
 #include <signal.h>
 #include <errno.h>
+#include <stdarg.h>
 
 
 Library lib;
@@ -539,6 +540,7 @@ void borrow_book(char *username, char *book_title, int fd) {
     pthread_mutex_unlock(&book_ptr->lock);
     pthread_mutex_unlock(&user_ptr->lock);
     return;
+}
 
 void return_book(char *username, char *book_title, int fd) {
 
@@ -702,12 +704,12 @@ void *borrow_request_thread(void *arg) {
         pthread_mutex_lock(&book_ptr->lock);
         if (book_ptr->availability == AVAILABLE) {
             book_ptr->availability= LENT_OUT;
-            book_ptr->lent_to[0] = 'ctx.';      // add name of the borrower
+            book_ptr->lent_to[0] = '\0';      // remote loan, no local user
             outcome_str = "GRANTED";
             book_ptr->lent_to_lib = ctx->src_lib;
             book_ptr->really_lent = 0;
         } else {
-            outcome_str = "ALREADY_LENT"; // should try to recover?
+            outcome_str = "ALREADY_LENT";
         }
         pthread_mutex_unlock(&book_ptr->lock);
     }
@@ -730,25 +732,27 @@ void *borrow_request_thread(void *arg) {
 
 
 void *verify_request_thread(void *arg){
-    VerifyContext *vericontext = (VerifyContext *)arg;
+    VerifyContext *ctx = (VerifyContext *)arg;
+
+    const char *verdict = "NOT_HELD";
     pthread_mutex_lock(&lib.users_lock);
-    User *user_ptr = find_user(vericontext->username);
+    User *user_ptr = find_user(ctx->username);
     pthread_mutex_unlock(&lib.users_lock);
-    char message[1024];
-    if(user_ptr==NULL){
-        sprintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n", lib.id, vericontext->request_id, "NOT_HELD");
-    }
-    else{
+
+    if (user_ptr != NULL) {
         pthread_mutex_lock(&user_ptr->lock);
-        if(strcmp(user_ptr->borrowed,vericontext->book_title)==0){
-            snrintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n", lib.id, vericontext->request_id, "HELD");
-        }
-        else{
-            snprintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n", lib.id, vericontext->request_id, "NOT_HELD");
-        }
+        if (strcmp(user_ptr->borrowed, ctx->book_title) == 0)
+            verdict = "HELD";
+        pthread_mutex_unlock(&user_ptr->lock);
     }
-    send_to_library(vericontext->src_lib, message);
-    pthread_mutex_unlock(&user_ptr->lock);
+
+    char message[1024];
+    snprintf(message, sizeof(message), "LIB|RESPONSE|%d|%d|%s\n",
+             lib.id, ctx->request_id, verdict);
+    send_to_library(ctx->src_lib, message);
+
+    free(ctx);
+    return NULL;
 }
 // message handling
 void handle_user_message(char *message) {
