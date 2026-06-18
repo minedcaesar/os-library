@@ -380,6 +380,8 @@ Book *read_catalog(char *catalog_file, int lines) {
             catalog[current_book].availability = AVAILABLE;
             catalog[current_book].lent_to[0] = '\0';
         }
+        catalog[current_book].really_lent=0;
+        catalog[current_book].lent_to_lib=-1;
         pthread_mutex_init(&catalog[current_book].lock, NULL); // initializing per book mutex
         current_book++;
     }
@@ -601,6 +603,8 @@ void return_book(char *username, char *book_title, int fd) {
         strncpy(book_ptr->lent_to, "", sizeof(book_ptr->lent_to));
         strncpy(user_ptr->borrowed, "", sizeof(user_ptr->borrowed));
         user_ptr->borrowed[0]= '\0';
+        book_ptr->lent_to_lib=-1;
+        book_ptr->really_lent=0;
         pthread_mutex_unlock(&book_ptr->lock);
         pthread_mutex_unlock(&user_ptr->lock);
         send_message("0|Success", fd);
@@ -619,7 +623,7 @@ int matches(const Book *b, int by_author, int by_title, int by_year, const char 
 }
 
 void search_book(char* username,char *field, char *value,int fd, char* response_pipe) {
-    
+
     pthread_mutex_lock(&lib.users_lock);
     if(find_user(username)==NULL){
         send_message("1|No such user.",fd);
@@ -988,11 +992,6 @@ void handle_library_request(char *message) {
         book_ptr->availability = AVAILABLE;
         book_ptr->lent_to[0] = '\0';
         pthread_mutex_unlock(&book_ptr->lock);
-    }
-    else if (strcmp(kind, "VERIFY") == 0){
-        //LIB|VERIFY|src_lib|id|BOOK_NAME|USER_NAME
-
-
     }
 }
 

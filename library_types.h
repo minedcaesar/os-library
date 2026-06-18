@@ -6,6 +6,7 @@
 
 #define MAX_PENDING 2048
 #define BROADCAST_TIMEOUT_SEC 8 // so smaller than user.sh timeout
+#define VERIFY_TIMEOUT_SEC 4
 
 
 #define BROADCAST_ALL 0   /* target id meaning "contact every other library" (ids start at 1) */
