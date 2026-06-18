@@ -10,21 +10,14 @@ if [ $# -lt 3 ]; then
     exit 1
 fi
 
-username=$(echo "$1" | tr '[:lower:]' '[:upper:]')
-library_id=$2
-operation=$(echo "$3" | tr '[:lower:]' '[:upper:]')
-
-RESPONSE_PIPE=/tmp/"$username"_$$
-mkfifo $RESPONSE_PIPE
-
-if [ $? -ne 0 ]; then
-    echo "ERROR: Unable to create pipe- $RESPONSE_PIPE"
-    exit 1
-fi
-
-trap "rm -f $RESPONSE_PIPE" EXIT
-
-REQUEST_PIPE=/tmp/lib_cmd_"$library_id"
+function check_no_pipe_char() {
+    local field_name=$1
+    local value=$2
+    if [[ "$value" == *"|"* ]]; then
+        echo "ERROR: $field_name must not contain '|'"
+        exit 1
+    fi
+}
 
 function check_library_pipe_status() {
     if [ ! -p "$REQUEST_PIPE" ]; then
@@ -64,16 +57,25 @@ function handle_search_request() {
     local value=$2
 
     case $field in
-        author|title|year)
-            request_message="USER|SEARCH|${username}|${field}|${value}|${RESPONSE_PIPE}"
-            echo "$request_message"
+    author|title)
+        check_no_pipe_char "Search value" "$value"
         ;;
-        *)
-            echo "ERROR: Invalid search field '$field'. Use: author, title, year"
+    year)
+        if ! [[ "$value" =~ ^[0-9]{4}$ ]]; then
+            echo "ERROR: Year must be a 4-digit number (e.g. 1995)"
             exit 1
+        fi
+        ;;
+    *)
+        echo "ERROR: Invalid search field '$field'. Use: author, title, year"
+        exit 1
         ;;
     esac
+
+    request_message="USER|SEARCH|${username}|${field}|${value}|${RESPONSE_PIPE}"
+    echo "$request_message"
 }
+
 
 function process_request() {
     local request=$1
@@ -105,6 +107,36 @@ function process_response() {
     esac
 }
 
+username=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+library_id=$2
+operation=$(echo "$3" | tr '[:lower:]' '[:upper:]')
+
+# sanity checks:
+if [[ "$username" == *"/"* ]]; then
+    echo "ERROR: Username must not contain '/'"
+    exit 1
+fi
+
+if ! [[ "$library_id" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: library_id must be a positive integer"
+    exit 1
+fi
+
+check_no_pipe_char "Username" "$username"
+
+# set up pipes:
+REQUEST_PIPE=/tmp/lib_cmd_"$library_id"
+
+RESPONSE_PIPE=/tmp/"$username"_$$
+mkfifo $RESPONSE_PIPE
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: Unable to create pipe- $RESPONSE_PIPE"
+    exit 1
+fi
+
+trap "rm -f $RESPONSE_PIPE" EXIT
+
 case $operation in
     REGISTER)
         #REGISTER OPERATION
@@ -127,6 +159,7 @@ case $operation in
         #BORROW OPERATION
         check_num_args_for_borrow_return $#
         book_title=$4
+        check_no_pipe_char "Book title" "$book_title"
         request_message="USER|BORROW|${username}|${book_title}|${RESPONSE_PIPE}"
         process_request "$request_message"
         process_response
@@ -135,6 +168,7 @@ case $operation in
         #RETURN OPERATION
         check_num_args_for_borrow_return $#
         book_title=$4
+        check_no_pipe_char "Book title" "$book_title"
         request_message="USER|RETURN|${username}|${book_title}|${RESPONSE_PIPE}"
         process_request "$request_message"
         process_response
