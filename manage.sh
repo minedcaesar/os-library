@@ -70,9 +70,8 @@ case $OPERATION in
         pkill -SIGTERM library
         sleep 0.5
         
-        echo "Cleaning persistent building blocks via Makefile..."
-        # Trigger clean rules in your local workspace
-        make clean 2>/dev/null || rm -f /tmp/lib_cmd_*
+        echo "Cleaning up files..."
+        rm -f ./library /tmp/catalog*.csv /tmp/lib_cmd*
         echo "System offline."
         ;;
 
