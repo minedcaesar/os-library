@@ -340,6 +340,39 @@ int count_lines(char file_name[]) {
     fclose(fp);
     return count;
 }
+
+static char *next_csv_field(char **cursor, char *out, size_t outsz) {
+    char *p = *cursor;
+    size_t o = 0;
+    if (*p == '\0') { out[0] = '\0'; return NULL; }
+
+    if (*p == '"') {
+        p++;                                       // opening quote
+        while (*p) {
+            if (*p == '"' && *(p + 1) == '"') {    // escaped quote  ""
+                if (o + 1 < outsz) out[o++] = '"';
+                p += 2;
+            } else if (*p == '"') {                // closing quote
+                p++;
+                break;
+            } else {
+                if (o + 1 < outsz) out[o++] = *p;
+                p++;
+            }
+        }
+        while (*p && *p != ',') p++;               // skip to the separator
+    } else {
+        while (*p && *p != ',') {
+            if (o + 1 < outsz) out[o++] = *p;
+            p++;
+        }
+    }
+    out[o] = '\0';
+    if (*p == ',') p++;                            // consume the separator
+    *cursor = p;
+    return out;
+}
+
 //reads from a catalog txt file and returns a Book* catalog.
 Book *read_catalog(char *catalog_file, int lines) {
     int MAX_FIELD_LENGTH = 1024;
@@ -361,28 +394,21 @@ Book *read_catalog(char *catalog_file, int lines) {
         if (strlen(row) == 0)
             continue;
 
-        char *token = strtok(row, ",");
-        if (token != NULL) {
-            token = unquote(token);
-            strncpy(catalog[current_book].name, token, sizeof(catalog[current_book].name) - 1);
-            catalog[current_book].name[sizeof(catalog[current_book].name) - 1] = '\0';
-        }
-        token = strtok(NULL, ",");
-        if (token != NULL) {
-            token = unquote(token);
-            strncpy(catalog[current_book].author, token, sizeof(catalog[current_book].author) - 1);
-            catalog[current_book].author[sizeof(catalog[current_book].author) - 1] = '\0';
-        }
-        token = strtok(NULL, ",");
-        if (token != NULL)
-        {
-            catalog[current_book].year = atoi(token);
-            catalog[current_book].availability = AVAILABLE;
-            catalog[current_book].lent_to[0] = '\0';
-        }
-        catalog[current_book].really_lent=0;
-        catalog[current_book].lent_to_lib=-1;
-        pthread_mutex_init(&catalog[current_book].lock, NULL); // initializing per book mutex
+        Book *b = &catalog[current_book];
+        char *cursor = row;
+        char yearbuf[32];
+        char *name   = next_csv_field(&cursor, b->name,   sizeof(b->name));
+        char *author = next_csv_field(&cursor, b->author, sizeof(b->author));
+        char *year   = next_csv_field(&cursor, yearbuf,   sizeof(yearbuf));
+        if (!name || !author || !year)        // malformed row -> skip
+            continue;
+
+        b->year         = atoi(year);
+        b->availability = AVAILABLE;
+        b->lent_to[0]   = '\0';
+        b->really_lent  = 0;
+        b->lent_to_lib  = -1;
+        pthread_mutex_init(&b->lock, NULL);   // initializing per book mutex
         current_book++;
     }
     fclose(fp);
@@ -708,7 +734,7 @@ void *user_request_thread(void *arg) {
     }
     // Spec 2.6: one random 1-5s processing delay per user-facing request, applied here so
     // inter-library messages (BORROW/VERIFY) stay fast and nested waits don't compound.
-    sleep(1 + rand() % 5);
+    //sleep(1 + rand() % 5); COMMENTED OUT FOR DEBUG
     char *username = ctx->username;
     char *arg1 = ctx->arg1;
     if (strcmp(op, "REGISTER") == 0)
