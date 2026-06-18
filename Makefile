@@ -10,7 +10,7 @@ $(TARGET): library.c
 	$(CC) $(CFLAGS) -o $(TARGET) library.c
 
 clean:
-    ./manage.sh stop
+	rm -f ./$(TARGET) /tmp/catalog*.csv /tmp/lib_cmd*
 
 run: build
 	./bootstrap.sh $(ARGS)

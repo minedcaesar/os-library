@@ -29,7 +29,7 @@ void register_user(char*, int);
 void borrow_book(char*, char*, int);
 int resolve_loan(Book *);
 void return_book(char*, char*, int);
-void search_book(char *, char *, int, char);
+void search_book(char *, char *, int, char*);
 void* user_request_thread(void*);
 int lib_request(int, enum Outcome*, int*, const char*, ...)
     __attribute__((format(printf, 4, 5)));

@@ -101,6 +101,14 @@ typedef struct
     char book_title[256];
     char username[100];
 } VerifyContext;
+typedef struct
+{
+    int src_lib;
+    int request_id;
+    char field[32];
+    char value[512];
+    char resp_pipe[256];   // the *user's* response FIFO — peers stream matches straight to it
+} SearchContext;
 extern Library lib;
 
 #endif
