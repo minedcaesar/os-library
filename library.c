@@ -29,7 +29,7 @@ void register_user(char*, int);
 void borrow_book(char*, char*, int);
 int resolve_loan(Book *);
 void return_book(char*, char*, int);
-void search_book(char *, char *, int, char*);
+void search_book(char*,char *, char *, int, char*);
 void* user_request_thread(void*);
 int lib_request(int, enum Outcome*, int*, const char*, ...)
     __attribute__((format(printf, 4, 5)));
@@ -618,10 +618,16 @@ int matches(const Book *b, int by_author, int by_title, int by_year, const char 
     return 0;
 }
 
-void search_book(char *field, char *value,int fd, char* response_pipe) {
+void search_book(char* username,char *field, char *value,int fd, char* response_pipe) {
 
+    pthread_mutex_lock(&lib.users_lock);
+    if(find_user(username)==NULL){
+        send_message("1|No such user.",fd);
+        return;
+    }
+    pthread_mutex_unlock(&lib.users_lock);
 
-    int by_author = (strcmp(field, "author") == 0);
+   int by_author = (strcmp(field, "author") == 0);
     int by_title  = (strcmp(field, "title")  == 0);
     int by_year   = (strcmp(field, "year")   == 0);
 
@@ -632,38 +638,25 @@ void search_book(char *field, char *value,int fd, char* response_pipe) {
         return;
     }
 
-    int found = 0;
-    for (int i = 0; i < lib.num_books && !found; i++) found = matches(&lib.catalog[i], by_author, by_title, by_year, value);
-
-    if (!found) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "0|No books found matching %s = '%s'\n", field, value);
-        send_message(msg, fd);
-        return;
-    }
-
-    send_message("0|Search results:\n", fd);          // status line first
+    // Status line first so user.sh always reads a code, then our own local matches.
+    send_message("0|Search results:\n", fd);
     for (int i = 0; i < lib.num_books; i++) {
         if (matches(&lib.catalog[i], by_author, by_title, by_year, value)) {
             char line[512];
             snprintf(line, sizeof(line), "%s by %s (%d)\n", lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
-            send_message(line, fd);                    // one write per match
+            send_message(line, fd);
         }
     }
-    if (lib.num_total_libraries=1){
-        return;
-    }
-    // remote branch
-    //LIB|REQUEST|<src_id>|<req_id>|SEARCH|field|value|response_pipe
-    enum Outcome o;
-    int resp = -1;
-    //outcome is ignored, we only care about DONE
-     // Ask every other library to stream its matches directly to the user's pipe. Only the
-    // small query rides the command FIFO; the (possibly large) results never touch it. We then
-    // block until every peer sends a DONE ack or the TTL fires,
-    // so we keep the user's pipe open until all writers have finished.
 
-    lib_request(BROADCAST_ALL, &o, &resp, "SEARCH|%s|%s|%s", field, value, response_pipe);
+    // Ask every other library to stream its matches *directly* to the user's pipe. Only the
+    // small query rides the command FIFO; the (possibly large) results never touch it. We then
+    // block until every peer sends a DONE ack (counted by the pending quorum) or the TTL fires,
+    // so we keep the user's pipe open until all writers have finished.
+    if (lib.num_total_libraries > 1) {
+        enum Outcome o; int who = -1;
+        lib_request(BROADCAST_ALL, &o, &who, "SEARCH|%s|%s|%s", field, value, response_pipe);
+        // outcome ignored — we only needed the DONE quorum, not a verdict.
+    }
 }
 
 // Handles an inter-library SEARCH: write our matching books straight to the requesting user's
@@ -675,8 +668,12 @@ void *search_request_thread(void *arg) {
     int by_title  = (strcmp(ctx->field, "title")  == 0);
     int by_year   = (strcmp(ctx->field, "year")   == 0);
 
-    int fd = open(ctx->resp_pipe, O_WRONLY);   // the *user's* pipe, by path
+    // Open non-blocking so we fail fast if the user already gave up (no reader); then drop
+    // O_NONBLOCK so the result writes block rather than lose data.
+    int fd = open(ctx->resp_pipe, O_WRONLY | O_NONBLOCK);   // the *user's* pipe, by path
     if (fd >= 0) {
+        int fl = fcntl(fd, F_GETFL);
+        if (fl != -1) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
         for (int i = 0; i < lib.num_books; i++) {
             if (matches(&lib.catalog[i], by_author, by_title, by_year, ctx->value)) {
                 char line[512];
@@ -687,6 +684,14 @@ void *search_request_thread(void *arg) {
         }
         close(fd);
     }
+
+    // Ack DONE so the requester's pending quorum completes instead of waiting the full TTL.
+    char done[128];
+    snprintf(done, sizeof(done), "LIB|RESPONSE|%d|%d|DONE\n", lib.id, ctx->request_id);
+    send_to_library(ctx->src_lib, done);
+
+    free(ctx);
+    return NULL;
 }
 // working threads
 void *user_request_thread(void *arg) {
@@ -699,7 +704,7 @@ void *user_request_thread(void *arg) {
     }
     // Spec 2.6: one random 1-5s processing delay per user-facing request, applied here so
     // inter-library messages (BORROW/VERIFY) stay fast and nested waits don't compound.
-    sleep(1 + rand() % 5);
+    //sleep(1 + rand() % 5); COMMENTED OUT FOR DEBUG
     char *username = ctx->username;
     char *arg1 = ctx->arg1;
     if (strcmp(op, "REGISTER") == 0)
@@ -715,7 +720,7 @@ void *user_request_thread(void *arg) {
     }
     else if (strcmp(op, "SEARCH") == 0) {
         char *arg2 = ctx->arg2;
-        search_book(arg1, arg2, fd,ctx->response_pipe);
+        search_book(username,arg1, arg2, fd,ctx->response_pipe);
     }
     close(fd);
     free(arg);
@@ -937,6 +942,22 @@ void handle_library_request(char *message) {
             strncpy(ctx->username,   user,  sizeof(ctx->username)  - 1);
             pthread_t t;
             if (pthread_create(&t, NULL, verify_request_thread, ctx) != 0) { free(ctx); return; }
+            pthread_detach(t);
+        }
+        else if (strcmp(op, "SEARCH") == 0) {
+            // LIB|REQUEST|<src>|<id>|SEARCH|<field>|<value>|<resp_pipe>   (title token holds the field)
+            char *value = strtok_r(NULL, "|", &save);
+            char *rpipe = strtok_r(NULL, "|", &save);
+            if (!value || !rpipe) return;
+            SearchContext *ctx = calloc(1, sizeof(*ctx));
+            if (!ctx) return;
+            ctx->src_lib    = atoi(src_s);
+            ctx->request_id = atoi(id_s);
+            strncpy(ctx->field,     title, sizeof(ctx->field) - 1);
+            strncpy(ctx->value,     value, sizeof(ctx->value) - 1);
+            strncpy(ctx->resp_pipe, rpipe, sizeof(ctx->resp_pipe) - 1);
+            pthread_t t;
+            if (pthread_create(&t, NULL, search_request_thread, ctx) != 0) { free(ctx); return; }
             pthread_detach(t);
         }
     }
