@@ -23,7 +23,8 @@ enum Outcome
     LENT,
     ALREADY_LENT,
     HELD,        // verify: borrower confirms it really holds the book
-    NOT_HELD,    // verify: borrower doesn't have it -> safe to reclaim
+    NOT_HELD,    // verify: borrower doesn't have it -> safe to 
+    DONE
 };
 
 // user entity

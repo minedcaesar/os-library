@@ -29,7 +29,7 @@ void register_user(char*, int);
 void borrow_book(char*, char*, int);
 int resolve_loan(Book *);
 void return_book(char*, char*, int);
-void search_book();
+void search_book(char *, char *, int, char);
 void* user_request_thread(void*);
 int lib_request(int, enum Outcome*, int*, const char*, ...)
     __attribute__((format(printf, 4, 5)));
@@ -618,8 +618,8 @@ int matches(const Book *b, int by_author, int by_title, int by_year, const char 
     return 0;
 }
 
-void search_book(char *username, char *field, char *value, int fd) {
-    (void)username;
+void search_book(char *field, char *value,int fd, char* response_pipe) {
+
 
     int by_author = (strcmp(field, "author") == 0);
     int by_title  = (strcmp(field, "title")  == 0);
@@ -650,8 +650,44 @@ void search_book(char *username, char *field, char *value, int fd) {
             send_message(line, fd);                    // one write per match
         }
     }
+    if (lib.num_total_libraries=1){
+        return;
+    }
+    // remote branch
+    //LIB|REQUEST|<src_id>|<req_id>|SEARCH|field|value|response_pipe
+    enum Outcome o;
+    int resp = -1;
+    //outcome is ignored, we only care about DONE
+     // Ask every other library to stream its matches directly to the user's pipe. Only the
+    // small query rides the command FIFO; the (possibly large) results never touch it. We then
+    // block until every peer sends a DONE ack or the TTL fires,
+    // so we keep the user's pipe open until all writers have finished.
+
+    lib_request(BROADCAST_ALL, &o, &resp, "SEARCH|%s|%s|%s", field, value, response_pipe);
 }
 
+// Handles an inter-library SEARCH: write our matching books straight to the requesting user's
+// response pipe, then ack DONE so the requester's pending quorum can complete.
+void *search_request_thread(void *arg) {
+    SearchContext *ctx = (SearchContext *)arg;
+
+    int by_author = (strcmp(ctx->field, "author") == 0);
+    int by_title  = (strcmp(ctx->field, "title")  == 0);
+    int by_year   = (strcmp(ctx->field, "year")   == 0);
+
+    int fd = open(ctx->resp_pipe, O_WRONLY);   // the *user's* pipe, by path
+    if (fd >= 0) {
+        for (int i = 0; i < lib.num_books; i++) {
+            if (matches(&lib.catalog[i], by_author, by_title, by_year, ctx->value)) {
+                char line[512];
+                snprintf(line, sizeof(line), "%s by %s (%d)\n",
+                         lib.catalog[i].name, lib.catalog[i].author, lib.catalog[i].year);
+                send_message(line, fd);
+            }
+        }
+        close(fd);
+    }
+}
 // working threads
 void *user_request_thread(void *arg) {
     UserRequestContext *ctx = (UserRequestContext *)arg;
@@ -679,7 +715,7 @@ void *user_request_thread(void *arg) {
     }
     else if (strcmp(op, "SEARCH") == 0) {
         char *arg2 = ctx->arg2;
-        search_book(username, arg1, arg2, fd);
+        search_book(arg1, arg2, fd,ctx->response_pipe);
     }
     close(fd);
     free(arg);
