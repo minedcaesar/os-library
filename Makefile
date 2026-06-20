@@ -1,17 +1,21 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -g
+CFLAGS = -Wall -Wextra -g -pthread
 
 TARGET = library
+OBJS = main.o catalog.o operations.o protocol.o
 
 build: $(TARGET)
 	chmod +x bootstrap.sh manage.sh user.sh
 
-$(TARGET): library.c
-	$(CC) $(CFLAGS) -o $(TARGET) library.c
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
+
+%.o: %.c library.h library_types.h
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
 	@./manage.sh stop
-# the @ is used to not print the command ./manage.sh stop
+	rm -f *.o $(TARGET)
 
 run: build
 	./bootstrap.sh $(ARGS)

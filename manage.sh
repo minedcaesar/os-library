@@ -71,7 +71,7 @@ case $OPERATION in
         sleep 0.5
         
         echo "Cleaning up files..."
-        rm -f ./library /tmp/catalog*.csv /tmp/lib_cmd*
+        rm -f /tmp/catalog*.csv /tmp/lib_cmd*
         echo "System offline."
         ;;
 
