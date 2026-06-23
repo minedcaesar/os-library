@@ -54,10 +54,17 @@ void register_user(char *username, int fd) {
 int resolve_loan(Book *book) {
     if (book->availability == AVAILABLE)
         return 1;
-    if (book->lent_to_lib == -1 || book->really_lent == 1)
-        return 0;   // local loan, or an already-confirmed remote loan
+    if (book->lent_to_lib == -1)
+        return 0;   // a local loan -> genuinely unavailable
 
-    // Unconfirmed remote loan: snapshot what the round-trip needs, then verify without the lock.
+    // A HELD confirmation is only a *lease*: trust it (skip the round-trip) while it is valid,
+    // but once it lapses we must re-verify, so a lost LIB|RETURN can still be reconciled.
+    time_t now = time(NULL);
+    if (book->really_lent == 1 && now < book->verified_until)
+        return 0;   // confirmed remote loan, lease still valid
+
+    // Unconfirmed or lease-expired remote loan: snapshot what the round-trip needs, then verify
+    // without holding the lock.
     int  target = book->lent_to_lib;
     char title[100], borrower[100];
     strncpy(title,    book->name,    sizeof(title) - 1);    title[sizeof(title) - 1]       = '\0';
@@ -68,16 +75,18 @@ int resolve_loan(Book *book) {
     int rc = lib_request(target, &o, &who, "VERIFY|%s|%s", title, borrower);
 
     pthread_mutex_lock(&book->lock);
-    // apply the verdict only if nothing changed under us during the round-trip
-    if (book->availability == LENT_OUT &&
-        book->lent_to_lib == target && book->really_lent == 0) {
+    // Apply the verdict only if it is still the same loan we set out to verify (the book may have
+    // been returned or re-lent during the round-trip). Note: we do NOT require really_lent == 0
+    // here, because re-verifying an expired lease starts from really_lent == 1.
+    if (book->availability == LENT_OUT && book->lent_to_lib == target) {
         if (rc == 0 && o == NOT_HELD) {
-            book->availability = AVAILABLE;   // borrower lost the grant -> reclaim
+            book->availability = AVAILABLE;   // borrower no longer holds it -> reclaim
             book->lent_to_lib  = -1;
             book->really_lent  = 0;
             book->lent_to[0]   = '\0';
         } else if (o == HELD) {
-            book->really_lent  = 1;           // confirmed -> never re-ask
+            book->really_lent    = 1;                          // confirmed...
+            book->verified_until = time(NULL) + VERIFY_CACHE_TTL_SEC;  // ...but only for a bounded lease
         }
     }
 

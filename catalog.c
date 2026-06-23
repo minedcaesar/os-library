@@ -87,11 +87,12 @@ Book *read_catalog(char *catalog_file, int lines) {
         char *year   = next_csv_field(&cursor, yearbuf,   sizeof(yearbuf));
         if (!name || !author || !year) continue;       // malformed row -> skip
 
-        b->year         = atoi(year);
-        b->availability = AVAILABLE;
-        b->lent_to[0]   = '\0';
-        b->really_lent  = 0;
-        b->lent_to_lib  = -1;
+        b->year           = atoi(year);
+        b->availability   = AVAILABLE;
+        b->lent_to[0]     = '\0';
+        b->really_lent    = 0;
+        b->verified_until = 0;
+        b->lent_to_lib    = -1;
         pthread_mutex_init(&b->lock, NULL);   // initializing per book mutex
         current_book++;
     }

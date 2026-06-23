@@ -3,10 +3,12 @@
 
 #include <pthread.h>
 #include <stdatomic.h>
+#include <time.h>
 
 #define MAX_PENDING 2048
 #define BROADCAST_TIMEOUT_SEC 8 // so smaller than user.sh timeout
 #define VERIFY_TIMEOUT_SEC 4
+#define VERIFY_CACHE_TTL_SEC 60 // how long a HELD confirmation is trusted before we re-verify
 
 
 #define BROADCAST_ALL 0   /* target id meaning "contact every other library" (ids start at 1) */
@@ -43,7 +45,8 @@ typedef struct
     char author[100];
     int year;
     int lent_to_lib;
-    int really_lent;
+    int really_lent;            // 1 = a remote loan was confirmed HELD (cache; see verified_until)
+    time_t verified_until;      // the HELD confirmation is trusted only until this time, then re-verify
     enum Availability availability;
     char lent_to[100];
     pthread_mutex_t lock;
