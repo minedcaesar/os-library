@@ -257,6 +257,8 @@ void search_book(char* username,char *field, char *value,int fd, char* response_
         return;
     }
 
+    sleep(rand()%5 +1);
+
     // Status line first so user.sh always reads a code, then our own local matches.
     send_message("0|Search results:\n", fd);
     for (int i = 0; i < lib.num_books; i++) {
