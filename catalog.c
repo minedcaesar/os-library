@@ -113,7 +113,7 @@ User *find_user(const char *username) {
     return user_ptr;
 }
 
-Book* find_book(const char* title) {
+Book *find_book(const char* title) {
     Book *book_ptr = NULL;
     for (int i = 0; i < lib.num_books; i++)
     {
