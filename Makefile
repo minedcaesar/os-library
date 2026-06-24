@@ -18,6 +18,9 @@ clean:
 	rm -f *.o $(TARGET)
 
 run: build
-	@echo "Build complete. Start a scenario with the bootstrapping script, e.g.:"
-	@echo "    ./bootstrap.sh <num_libraries> <source_csv>"
-	@echo "    ./bootstrap.sh 3 books.csv"
+ifeq ($(strip $(ARGS)),)
+	@echo "Compilation succeeded. No scenario started: pass ARGS to bootstrap one, e.g.:"
+	@echo "    make run ARGS=\"3 books.csv\""
+else
+	./bootstrap.sh $(ARGS)
+endif
