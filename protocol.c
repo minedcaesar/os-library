@@ -7,6 +7,16 @@ void send_message(char *message, int fd) {
     write(fd, message, strlen(message));
 }
 
+// Emits a user-facing status line "<code>|<message>" on fd. The numeric code comes from
+// errors.h and is the single source of truth; user.sh reads field 1 and maps the same
+// values. Keeping the code a real integer argument (rather than baked into the string)
+// is what makes the error set "defined and used consistently" across C and Bash.
+void send_status(int fd, int code, const char *message) {
+    char buf[640];
+    snprintf(buf, sizeof(buf), "%d|%s", code, message);
+    send_message(buf, fd);
+}
+
 // Opens a peer library's command FIFO, writes msg, and closes it. Non-blocking, so a
 // busy or dead peer never stalls us (and never deadlocks against our own listener).
 // Returns 0 on success, -1 if the peer is unreachable.

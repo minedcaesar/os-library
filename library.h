@@ -20,6 +20,7 @@
 #include <sys/select.h>
 
 #include "library_types.h"
+#include "errors.h"
 
 /* The single global library instance; defined in main.c. */
 /* (library_types.h already declares `extern Library lib;`) */
@@ -40,6 +41,7 @@ void  search_book(char *username, char *field, char *value, int fd, char *respon
 
 /* ---- protocol.c : IPC, listener, request/response handling, worker threads ---- */
 void  send_message(char *message, int fd);
+void  send_status(int fd, int code, const char *message);  /* emits "<code>|<message>" */
 int   send_to_library(int lib_id, const char *msg);
 int   request_id(void);
 int   lib_request(int target, enum Outcome *outcome, int *responder, const char *fmt, ...)

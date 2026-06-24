@@ -8,9 +8,8 @@ void register_user(char *username, int fd) {
     {
         if (strcmp(lib.users[i]->username, username) == 0)
         {
-            perror("Username already taken");
             pthread_mutex_unlock(&lib.users_lock);
-            send_message("2|User already registered", fd);
+            send_status(fd, ERR_INVALID, "User already registered");
             return;
         }
     }
@@ -23,7 +22,7 @@ void register_user(char *username, int fd) {
         {
             perror("Failed to reallocate");
             pthread_mutex_unlock(&lib.users_lock);
-            send_message("6|Failed to reallocate user list, please retry", fd);
+            send_status(fd, ERR_SYSTEM, "Failed to reallocate user list, please retry");
             return;
         }
         lib.users = tmp;
@@ -33,7 +32,7 @@ void register_user(char *username, int fd) {
     if (!u)
     {
         pthread_mutex_unlock(&lib.users_lock);
-        send_message("6|Malloc failed", fd);
+        send_status(fd, ERR_SYSTEM, "Malloc failed");
         return;
     }
     strncpy(u->username, username, sizeof(u->username) - 1);
@@ -43,7 +42,7 @@ void register_user(char *username, int fd) {
     u->borrowed_from_lib = -1;
     lib.users[lib.num_users++] = u;
     pthread_mutex_unlock(&lib.users_lock);
-    send_message("0|User registered", fd);
+    send_status(fd, ERR_OK, "User registered");
 }
 
 // Caller holds book->lock; book is being considered for lending. If it is an *unconfirmed*
@@ -103,13 +102,13 @@ void borrow_book(char *username, char *book_title, int fd) {
 
     if (user_ptr == NULL)
     {
-        send_message("1|No such User.", fd);
+        send_status(fd, ERR_NOT_FOUND, "No such User.");
         return;
     }
     pthread_mutex_lock(&user_ptr->lock);
     if (user_ptr->borrowed[0] != '\0')
     {
-        send_message("7|User has a book", fd);
+        send_status(fd, ERR_HAS_BOOK, "User has a book");
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
@@ -127,7 +126,7 @@ void borrow_book(char *username, char *book_title, int fd) {
         enum Outcome outcome;
         int lib_responder =-1;
         if (lib_request(BROADCAST_ALL, &outcome, &lib_responder, "BORROW|%s|%s", book_title, username) < 0) {
-            send_message("6|System busy, try again later", fd);
+            send_status(fd, ERR_SYSTEM, "System busy, try again later");
             pthread_mutex_unlock(&user_ptr->lock);
             return;
         }
@@ -135,13 +134,13 @@ void borrow_book(char *username, char *book_title, int fd) {
             strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed) - 1);
             user_ptr->borrowed[sizeof(user_ptr->borrowed) - 1] = '\0';
             user_ptr->borrowed_from_lib = lib_responder;
-            send_message("0|Book has successfully been lent", fd);
+            send_status(fd, ERR_OK, "Book has successfully been lent");
         }
         else if (outcome == ALREADY_LENT) {
-            send_message("4|Book was already lent to another user", fd);
+            send_status(fd, ERR_UNAVAILABLE, "Book was already lent to another user");
         }
         else { // PENDING — timed out, or nobody had the book
-            send_message("1|No such book.", fd);
+            send_status(fd, ERR_NOT_FOUND, "No such book.");
         }
         pthread_mutex_unlock(&user_ptr->lock);
 
@@ -159,10 +158,10 @@ void borrow_book(char *username, char *book_title, int fd) {
         book_ptr->lent_to[sizeof(book_ptr->lent_to)-1]='\0';
         strncpy(user_ptr->borrowed, book_title, sizeof(user_ptr->borrowed)-1);
         user_ptr->borrowed[sizeof(user_ptr->borrowed)-1]='\0';
-        send_message("0|Success", fd);
+        send_status(fd, ERR_OK, "Success");
     }
     else {
-        send_message("4|Book not available", fd);
+        send_status(fd, ERR_UNAVAILABLE, "Book not available");
     }
     pthread_mutex_unlock(&book_ptr->lock);
     pthread_mutex_unlock(&user_ptr->lock);
@@ -178,22 +177,21 @@ void return_book(char *username, char *book_title, int fd) {
 
     if (user_ptr == NULL)
     {
-        perror("No such user");
-        send_message("1|No such user", fd);
+        send_status(fd, ERR_NOT_FOUND, "No such user");
         return;
     }
     // check if they have no book
     pthread_mutex_lock(&user_ptr->lock);
     if ((user_ptr->borrowed)[0] == '\0')
     {
-        send_message("5|User doesnt have a book", fd);
+        send_status(fd, ERR_NO_LOAN, "User doesnt have a book");
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
     // check if they are trying to return the right book
     if (strcmp(user_ptr->borrowed, book_title))
     {
-        send_message("8|User doesnt have that book", fd);
+        send_status(fd, ERR_WRONG_BOOK, "User doesnt have that book");
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
@@ -202,13 +200,13 @@ void return_book(char *username, char *book_title, int fd) {
         char buffer[1024];
         snprintf(buffer, sizeof(buffer), "LIB|RETURN|%d|%s\n", lib.id, book_title);
         if(send_to_library(user_ptr->borrowed_from_lib, buffer) < 0){
-            send_message("6|System busy, try later", fd);
+            send_status(fd, ERR_SYSTEM, "System busy, try later");
             pthread_mutex_unlock(&user_ptr->lock);
             return;
         }
         user_ptr->borrowed[0] = '\0';
         user_ptr->borrowed_from_lib=-1;
-        send_message("0|Successfully returned the book", fd);
+        send_status(fd, ERR_OK, "Successfully returned the book");
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
@@ -216,7 +214,7 @@ void return_book(char *username, char *book_title, int fd) {
     Book *book_ptr = find_book(book_title);
     if (book_ptr == NULL)
     {
-        send_message("3|No such book",fd);
+        send_status(fd, ERR_NO_BOOK, "No such book");
         pthread_mutex_unlock(&user_ptr->lock);
         return;
     }
@@ -231,7 +229,7 @@ void return_book(char *username, char *book_title, int fd) {
         book_ptr->really_lent=0;
         pthread_mutex_unlock(&book_ptr->lock);
         pthread_mutex_unlock(&user_ptr->lock);
-        send_message("0|Success", fd);
+        send_status(fd, ERR_OK, "Success");
     }
 }
 
@@ -242,7 +240,7 @@ void search_book(char* username,char *field, char *value,int fd, char* response_
     int known = (find_user(username) != NULL);
     pthread_mutex_unlock(&lib.users_lock);
     if (!known) {
-        send_message("1|No such user.", fd);
+        send_status(fd, ERR_NOT_FOUND, "No such user.");
         return;
     }
 
@@ -251,16 +249,16 @@ void search_book(char* username,char *field, char *value,int fd, char* response_
     int by_year   = (strcmp(field, "year")   == 0);
 
     if (!by_author && !by_title && !by_year) {
-        char err[128];
-        snprintf(err, sizeof(err), "2|Invalid search field '%s'\n", field);
-        send_message(err, fd);
+        char err[160];
+        snprintf(err, sizeof(err), "Invalid search field '%s'\n", field);
+        send_status(fd, ERR_INVALID, err);
         return;
     }
 
     sleep(rand()%5 +1);
 
     // Status line first so user.sh always reads a code, then our own local matches.
-    send_message("0|Search results:\n", fd);
+    send_status(fd, ERR_OK, "Search results:\n");
     for (int i = 0; i < lib.num_books; i++) {
         if (matches(&lib.catalog[i], by_author, by_title, by_year, value)) {
             char line[512];

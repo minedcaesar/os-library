@@ -23,8 +23,8 @@ interact with the system through Bash scripts.
 ## Build & run
 
 ```sh
-make build                              # compiles ./library, marks the scripts executable
-make run ARGS="3 csv_books/books.csv"   # bootstraps a scenario (3 libraries from books.csv)
+make build                          # compiles ./library, marks the scripts executable
+make run ARGS="3 books.csv"         # bootstraps a scenario (3 libraries from books.csv)
 make clean                              # removes the binary and stale IPC (/tmp/lib_cmd*, /tmp/catalog*.csv)
 ```
 
@@ -34,7 +34,7 @@ make clean                              # removes the binary and stale IPC (/tmp
 
 ```sh
 make build
-./bootstrap.sh 3 csv_books/books.csv
+./bootstrap.sh 3 books.csv
 
 ./user.sh Alice   1 register
 ./user.sh Alice   1 borrow "The Great Gatsby"
@@ -53,13 +53,18 @@ make build
 
 | File                  | Role                                                                       |
 |-----------------------|----------------------------------------------------------------------------|
-| `library.c`           | The library process: catalog, user/inter-library request handling, IPC.    |
+| `main.c`              | Process setup and the signal-driven main loop (status dump / shutdown).     |
+| `catalog.c`           | CSV parsing and catalog/user lookups.                                       |
+| `operations.c`        | User-facing operations: register / borrow / return / search.               |
+| `protocol.c`          | IPC primitives, the listener, and the per-request worker threads.           |
+| `library.h`           | Shared function prototypes.                                                 |
 | `library_types.h`     | Shared data structures (`Book`, `User`, `PendingRequest`, contexts, …).     |
+| `errors.h`            | Status / error codes (the C-side source of truth).                          |
 | `bootstrap.sh`        | Splits the source CSV into N catalogs and launches N libraries.             |
 | `user.sh`             | User-facing client: register / search / borrow / return.                   |
 | `manage.sh`           | Admin script: status / list_books / list_users / stop.                     |
 | `Makefile`            | `build` / `clean` / `run` targets.                                         |
-| `csv_books/books.csv` | Source catalog (`Title,Author,Year`, with a header row).                   |
+| `books.csv`           | Source catalog (`Title,Author,Year`, with a header row).                   |
 
 ---
 

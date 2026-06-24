@@ -10,6 +10,17 @@ if [ $# -lt 3 ]; then
     exit 1
 fi
 
+# --- Status codes: mirror of errors.h on the C side (same values, not shared). ---
+readonly ERR_OK=0
+readonly ERR_NOT_FOUND=1
+readonly ERR_INVALID=2
+readonly ERR_NO_BOOK=3
+readonly ERR_UNAVAILABLE=4
+readonly ERR_NO_LOAN=5
+readonly ERR_SYSTEM=6
+readonly ERR_HAS_BOOK=7
+readonly ERR_WRONG_BOOK=8
+
 function check_no_pipe_char() {
     local field_name=$1
     local value=$2
@@ -101,9 +112,14 @@ function process_response() {
     [ -n "$first_msg" ] && echo "$first_msg"
     [ -n "$body" ]      && printf '%s\n' "$body"
 
-    case $status_code in
-        0) exit 0 ;;
-        *) exit 1 ;;
+    case "$status_code" in
+        "$ERR_OK")
+            exit 0 ;;
+        "$ERR_NOT_FOUND"|"$ERR_INVALID"|"$ERR_NO_BOOK"|"$ERR_UNAVAILABLE"|"$ERR_NO_LOAN"|"$ERR_SYSTEM"|"$ERR_HAS_BOOK"|"$ERR_WRONG_BOOK")
+            exit 1 ;;
+        *)
+            echo "ERROR: unknown status code '$status_code' from library $library_id"
+            exit 1 ;;
     esac
 }
 

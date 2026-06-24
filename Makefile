@@ -10,7 +10,7 @@ build: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
 
-%.o: %.c library.h library_types.h
+%.o: %.c library.h library_types.h errors.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
