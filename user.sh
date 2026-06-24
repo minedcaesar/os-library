@@ -109,7 +109,7 @@ function process_response() {
     status_code=$(printf '%s' "$status_line" | cut -d'|' -f1)
     first_msg=$(printf '%s' "$status_line" | cut -d'|' -f2-)
 
-    [ -n "$first_msg" ] && echo "$first_msg"
+    [ -n "$first_msg" ] && echo "[code $status_code] $first_msg"
     [ -n "$body" ]      && printf '%s\n' "$body"
 
     case "$status_code" in

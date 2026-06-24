@@ -274,6 +274,6 @@ void search_book(char* username,char *field, char *value,int fd, char* response_
     if (lib.num_total_libraries > 1) {
         enum Outcome o; int who = -1;
         lib_request(BROADCAST_ALL, &o, &who, "SEARCH|%s|%s|%s", field, value, response_pipe);
-        // outcome ignored — we only needed the DONE quorum, not a verdict.
+        // outcome ignored we only needed the DONE quorum, not a verdict.
     }
 }

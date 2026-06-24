@@ -5,7 +5,7 @@ TARGET = library
 OBJS = main.o catalog.o operations.o protocol.o
 
 build: $(TARGET)
-	chmod +x bootstrap.sh manage.sh user.sh
+	chmod +x bootstrap.sh manage.sh user.sh		
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS)
