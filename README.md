@@ -208,15 +208,16 @@ lines (e.g. search results).
 
 ## Error / status codes
 
-The library answers every user request with a leading numeric code; `user.sh` exits `0` on code
-`0` and `1` otherwise.
+The codes are defined once as named constants in `errors.h` and mirrored as same-valued shell
+variables in `user.sh`. The library answers every user request with a leading numeric code;
+`user.sh` exits `0` on code `0` and `1` otherwise.
 
-| Code | Meaning                                                              |
+| Code | Meaning                                                             |
 |------|---------------------------------------------------------------------|
 | 0    | Success (registered / lent / returned / search results)             |
-| 1    | No such user, or book found in no catalog at all                    |
+| 1    | No such user (not registered with this library)                     |
 | 2    | User already registered, or invalid search field                    |
-| 3    | No such book (on return)                                            |
+| 3    | No such book: the book exists in no catalog at all                  |
 | 4    | Book is already lent out                                            |
 | 5    | User has no book to return                                          |
 | 6    | System busy / allocation failure — retry                            |
