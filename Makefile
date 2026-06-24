@@ -18,4 +18,6 @@ clean:
 	rm -f *.o $(TARGET)
 
 run: build
-	./bootstrap.sh $(ARGS)
+	@echo "Build complete. Start a scenario with the bootstrapping script, e.g.:"
+	@echo "    ./bootstrap.sh <num_libraries> <source_csv>"
+	@echo "    ./bootstrap.sh 3 books.csv"
