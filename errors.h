@@ -14,9 +14,9 @@
  */
 
 #define ERR_OK           0   /* success: registered / lent / returned / search results */
-#define ERR_NOT_FOUND    1   /* no such user, or book found in no catalog at all        */
+#define ERR_NO_USER      1   /* no such user (not registered with this library)         */
 #define ERR_INVALID      2   /* user already registered, or invalid search field        */
-#define ERR_NO_BOOK      3   /* no such book in this catalog (on return)                */
+#define ERR_NO_BOOK      3   /* no such book: found in no catalog (borrow) or here (return) */
 #define ERR_UNAVAILABLE  4   /* book is already lent out                                */
 #define ERR_NO_LOAN      5   /* user has no book to return                              */
 #define ERR_SYSTEM       6   /* system busy / allocation failure — retry                */

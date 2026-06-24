@@ -102,7 +102,7 @@ void borrow_book(char *username, char *book_title, int fd) {
 
     if (user_ptr == NULL)
     {
-        send_status(fd, ERR_NOT_FOUND, "No such User.");
+        send_status(fd, ERR_NO_USER, "No such User.");
         return;
     }
     pthread_mutex_lock(&user_ptr->lock);
@@ -140,7 +140,7 @@ void borrow_book(char *username, char *book_title, int fd) {
             send_status(fd, ERR_UNAVAILABLE, "Book was already lent to another user");
         }
         else { // PENDING — timed out, or nobody had the book
-            send_status(fd, ERR_NOT_FOUND, "No such book.");
+            send_status(fd, ERR_NO_BOOK, "No such book.");
         }
         pthread_mutex_unlock(&user_ptr->lock);
 
@@ -177,7 +177,7 @@ void return_book(char *username, char *book_title, int fd) {
 
     if (user_ptr == NULL)
     {
-        send_status(fd, ERR_NOT_FOUND, "No such user");
+        send_status(fd, ERR_NO_USER, "No such user");
         return;
     }
     // check if they have no book
@@ -240,7 +240,7 @@ void search_book(char* username,char *field, char *value,int fd, char* response_
     int known = (find_user(username) != NULL);
     pthread_mutex_unlock(&lib.users_lock);
     if (!known) {
-        send_status(fd, ERR_NOT_FOUND, "No such user.");
+        send_status(fd, ERR_NO_USER, "No such user.");
         return;
     }
 

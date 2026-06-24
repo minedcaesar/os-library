@@ -12,7 +12,7 @@ fi
 
 # --- Status codes: mirror of errors.h on the C side (same values, not shared). ---
 readonly ERR_OK=0
-readonly ERR_NOT_FOUND=1
+readonly ERR_NO_USER=1
 readonly ERR_INVALID=2
 readonly ERR_NO_BOOK=3
 readonly ERR_UNAVAILABLE=4
@@ -115,7 +115,7 @@ function process_response() {
     case "$status_code" in
         "$ERR_OK")
             exit 0 ;;
-        "$ERR_NOT_FOUND"|"$ERR_INVALID"|"$ERR_NO_BOOK"|"$ERR_UNAVAILABLE"|"$ERR_NO_LOAN"|"$ERR_SYSTEM"|"$ERR_HAS_BOOK"|"$ERR_WRONG_BOOK")
+        "$ERR_NO_USER"|"$ERR_INVALID"|"$ERR_NO_BOOK"|"$ERR_UNAVAILABLE"|"$ERR_NO_LOAN"|"$ERR_SYSTEM"|"$ERR_HAS_BOOK"|"$ERR_WRONG_BOOK")
             exit 1 ;;
         *)
             echo "ERROR: unknown status code '$status_code' from library $library_id"
